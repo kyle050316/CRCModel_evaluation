@@ -1,0 +1,21 @@
+{
+  "n_list1": 1222,
+  "n_list2": 1002,
+  "n_reconstructed_visible": 1493,
+  "n_expected_visible": 1493,
+  "keys_equal": true,
+  "state_equal": true,
+  "matched_equal": true,
+  "state_mismatch_count": 0,
+  "reconstructed_state_counts": {
+    "11": 731,
+    "10": 491,
+    "01": 271
+  },
+  "paths": {
+    "list1": "/Users/kylewang/Desktop/GENIE/CRCmodel/CRCevaluation_20260422/list_state_extension/data/simulated_list1.csv",
+    "list2": "/Users/kylewang/Desktop/GENIE/CRCmodel/CRCevaluation_20260422/list_state_extension/data/simulated_list2.csv",
+    "expected": "/Users/kylewang/Desktop/GENIE/CRCmodel/CRCevaluation_20260422/list_state_extension/data/expected_visible_from_simulation.csv",
+    "reconstructed": "/Users/kylewang/Desktop/GENIE/CRCmodel/CRCevaluation_20260422/list_state_extension/data/reconstructed_visible_states.csv"
+  }
+}
