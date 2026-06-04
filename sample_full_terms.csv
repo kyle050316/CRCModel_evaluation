@@ -1,0 +1,7 @@
+doc_id,phrase,type,context,source_category,note_text,matched
+1,hypertension,Disease or Syndrome,patient has hypertension,diagnosis,patient has hypertension and diabetes,1
+1,diabetes mellitus,Disease or Syndrome,patient has diabetes,diagnosis,patient has hypertension and diabetes,1
+1,aspirin,Pharmacologic Substance,takes aspirin,medication,patient takes aspirin daily,0
+2,chest pain,Sign or Symptom,reports chest pain,symptom,patient reports chest pain and shortness of breath,1
+2,shortness of breath,Sign or Symptom,reports shortness of breath,symptom,patient reports chest pain and shortness of breath,1
+2,metformin,Clinical Drug,taking metformin,medication,patient taking metformin,0
