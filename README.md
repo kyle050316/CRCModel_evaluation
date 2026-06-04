@@ -111,7 +111,6 @@ simulation_outputs/models/pubmedbert/q_function.pt
 simulation_outputs/models/pubmedbert/train_summary.json
 simulation_outputs/plots/precision_hist.png
 simulation_outputs/plots/recall_hist.png
-simulation_outputs/plots/summary_barplot.png
 ```
 
 ## Expected Simulation Output
@@ -141,7 +140,6 @@ The plot files summarize this visually:
 | --- | --- |
 | `precision_hist.png` | Bootstrap distributions for naive and CRC-corrected precision, with full-truth precision marked. |
 | `recall_hist.png` | Bootstrap distributions for naive and CRC-corrected recall, with full-truth recall marked. |
-| `summary_barplot.png` | Bar plot comparing full truth, naive visible mean, and CRC-corrected mean. |
 
 ## Input Format For User Data
 
