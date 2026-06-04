@@ -8,6 +8,7 @@ import pandas as pd
 from crc_functions import build_state_table_from_two_lists, write_table
 from synthetic_pipeline import SIM_SEED, load_synthetic_full_terms, sampling_probabilities
 
+
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 

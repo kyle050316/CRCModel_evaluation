@@ -1,7 +1,7 @@
 __pycache__/
 *.py[cod]
 
-# Generated outputs. Regenerate these locally.
+# Generated outputs. Keep the source workbook in Git; regenerate these locally.
 data/
 simulation_outputs/
 evaluation_outputs/
