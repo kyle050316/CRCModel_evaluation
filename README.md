@@ -1,52 +1,274 @@
-# CRC Model Evaluation Minimal Demo
+# Two-List Model Evaluation
 
-This repository contains a lightweight, self-contained demo for reconstructing visible states from two partially observed clinical term lists.
 
-The bundled `sample_full_terms.csv` provides demo data. Running the script simulates two annotation lists, reconstructs the visible `10` / `01` / `11` state table, validates the reconstruction against the simulated truth, and writes generated outputs under `data/`.
+Goal Evaluate a new model from two partially correct annotaions.
+This algorithm takes input from two diﬀerent extractions that could cover only part of the truth， correcting
+the bias of missing annotatioins
 
-## Files
+The user provides inputs
 
-- `build_two_lists_and_validate.py`: runnable demo entry point.
-- `crc_functions.py`: lightweight helpers for table writing and two-list state reconstruction.
-- `synthetic_pipeline.py`: demo data loading and deterministic sampling utilities.
-- `sample_full_terms.csv`: bundled sample clinical-term data.
-- `requirements.txt`: minimal Python dependencies.
+1. `list1_df`: first annotation list.
+2. `list2_df`: second annotation list.
+3. `model_df`: new model predictions.
 
-## Run
+
+## Main Function
+
+```python
+summary = evaluate_two_lists_with_model(
+    list1_df=list1_df,
+    list2_df=list2_df,
+    model_df=model_df,
+    output_dir="evaluation_outputs",
+    method="character",
+)
+```
+
+## Running This Folder Independently
+
+This folder is self-contained for the two-list reconstruction and matching
+code paths. It uses the bundled `sample_full_terms.csv` demo data if the full
+synthetic Excel workbook is not present. Run the lightweight validation with:
 
 ```bash
-pip install -r requirements.txt
 python3 build_two_lists_and_validate.py
 ```
 
-Expected output includes a JSON report like:
+Expected outputs are written with relative paths under `data/`.
 
-```json
-{
-  "keys_equal": true,
-  "state_equal": true,
-  "matched_equal": true
-}
+The full CRC q-function training path uses a local PubMedBERT checkpoint through
+Hugging Face `local_files_only=True`. If the checkpoint is not already in the
+default cache on a new machine, set:
+
+```bash
+export PUBMEDBERT_PATH=/path/to/local/pubmedbert/checkpoint
 ```
 
-Generated files are written to `data/` and are intentionally ignored by Git.
+Then run the full simulation with:
 
-## Data Input
+```bash
+python3 run_list_state_simulation.py
+```
 
-The demo uses `sample_full_terms.csv` by default. The expected columns are:
+The returned `summary` is a dictionary containing:
+
+- input row counts,
+- reconstructed state counts,
+- number of model-human matches,
+- naive precision/recall,
+- CRC-corrected precision/recall,
+- output file paths,
+- q-function training summary.
+
+## Input Format
+
+`list1_df` and `list2_df` must contain:
 
 ```text
-doc_id, phrase, type, context, source_category, note_text, matched
+doc_id, phrase, type, context
 ```
 
-If you place the full workbook `mimic_iii_synthetic_term_extraction_50_long_full_context-2.xlsx` in the repository root, `synthetic_pipeline.py` can read that instead.
+`model_df` must contain:
 
-## State Meaning
+```text
+doc_id, phrase, type
+```
+
+Example:
+
+```python
+import pandas as pd
+
+list1_df = pd.DataFrame([
+    {
+        "doc_id": 1,
+        "phrase": "hypertension",
+        "type": "Disease or Syndrome",
+        "context": "The patient has hypertension.",
+    }
+])
+
+list2_df = pd.DataFrame([
+    {
+        "doc_id": 1,
+        "phrase": "hypertension",
+        "type": "T047",
+        "context": "The patient has hypertension.",
+    }
+])
+
+model_df = pd.DataFrame([
+    {
+        "doc_id": 1,
+        "phrase": "hypertension",
+        "type": "Disease or Syndrome",
+    }
+])
+```
+
+## Obervation State
+
+The two annotation lists are merged by:
+
+```text
+doc_id, phrase, type, context
+```
+
+The generated state values are:
 
 | State | Meaning |
 | --- | --- |
-| `10` | Term appears in list 1 only |
-| `01` | Term appears in list 2 only |
-| `11` | Term appears in both lists |
+| `10` | The term appears in list 1 only |
+| `01` | The term appears in list 2 only |
+| `11` | The term appears in both lists |
 
-Rows with state `00` are unobserved and are not included in the reconstructed visible table.
+Rows with state `00` are not visible and are not included.
+
+The reconstructed visible table has:
+
+```text
+doc_id, phrase, type, context, state, matched
+```
+
+## Matching the New Model
+
+The evaluator supports two matching methods.
+
+### Character Matching
+
+```python
+summary = evaluate_two_lists_with_model(
+    list1_df,
+    list2_df,
+    model_df,
+    method="character",
+    require_type_match=True,
+)
+```
+
+Character matching is deterministic and conservative. It normalizes case, whitespace, and simple punctuation. By default, it also requires the semantic type to match after basic UMLS code normalization.
+
+This will match:
+
+```text
+hypertension <-> hypertension
+T047 <-> Disease or Syndrome
+```
+
+It will not infer synonymy:
+
+```text
+hypertension <-> high blood pressure
+```
+
+### AI Matching
+
+```python
+def ai_matcher(prompt: str) -> str:
+    # Call your AI provider here.
+    # Return the raw JSON string generated by the model.
+    return client.responses.create(...).output_text
+
+summary = evaluate_two_lists_with_model(
+    list1_df,
+    list2_df,
+    model_df,
+    method="ai",
+    ai_matcher=ai_matcher,
+)
+```
+
+ The prompt instructs the AI to:
+
+- compare terms only within the same source text,
+- allow clear synonyms, abbreviations, and paraphrases,
+- reject generic-vs-specific matches,
+- enforce one-to-one matching,
+- return valid JSON only.
+
+Expected AI output:
+
+```json
+{
+  "matches": [
+    {
+      "h_idx": 0,
+      "g_idx": 2,
+      "phrase_match": true,
+      "type_match": true,
+    }
+  ]
+}
+```
+
+Only pairs with `phrase_match=true` are used.
+
+## q-Function and Metrics
+
+If `q_function` is not provided, `evaluate_two_lists_with_model()` trains a q-function from the reconstructed two-list visible state table.
+
+The new model predictions are not used to train q. They are used only to create the `matched` column for precision/recall estimation.
+
+The default q-function setup uses the local `PUBMEDBERT_PATH` configuration:
+
+```text
+phrase [SEP] semantic type <type> [SEP] context <context>
+```
+
+It trains three binary heads:
+
+| Head | Label |
+| --- | --- |
+| `q1` | `state` in `10/11` |
+| `q2` | `state` in `01/11` |
+| `q12` | `state == 11` |
+
+You may pass an existing q-function:
+
+```python
+summary = evaluate_two_lists_with_model(
+    list1_df,
+    list2_df,
+    model_df,
+    q_function=my_q_function,
+)
+```
+
+`pred_total` defaults to `len(model_df)`. If your model has a separate total prediction count, pass it explicitly:
+
+```python
+summary = evaluate_two_lists_with_model(
+    list1_df,
+    list2_df,
+    model_df,
+    pred_total=1234,
+)
+```
+
+## Outputs
+
+By default, outputs are written to:
+
+```text
+evaluation_outputs/
+```
+
+Files:
+
+```text
+evaluation_outputs/data/q_training_visible_terms.csv
+evaluation_outputs/data/evaluation_visible_terms.csv
+evaluation_outputs/data/model_human_matches.csv
+evaluation_outputs/models/q_function/q_function.pt
+evaluation_outputs/models/q_function/train_summary.json
+evaluation_outputs/estimate/estimate_two_list_pubmedbert.json
+evaluation_outputs/evaluation_summary.json
+```
+
+`q_training_visible_terms.csv` contains only the reconstructed two-list state table and is used for q-function training.
+
+`evaluation_visible_terms.csv` contains the same reconstructed state table plus `matched`, where `matched` is created by comparing the new model predictions against the visible human terms.
+
+`model_human_matches.csv` contains model-human match details.
+
+`evaluation_summary.json` contains the final metrics and paths.
