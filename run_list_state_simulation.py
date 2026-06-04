@@ -1,16 +1,11 @@
 import json
 import math
 import random
-import sys
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 from crc_functions import (
     PUBMEDBERT_PATH,
@@ -36,11 +31,15 @@ from synthetic_pipeline import (
 )
 
 ROOT = Path(__file__).resolve().parent
-INPUT_XLSX = ROOT / "mimic_iii_synthetic_term_extraction_50_long_full_context-2 2.xlsx"
+INPUT_XLSX = ROOT / "mimic_iii_synthetic_term_extraction_50_long_full_context-2.xlsx"
 OUT_DIR = ROOT / "simulation_outputs"
 DATA_DIR = OUT_DIR / "data"
 MODEL_DIR = OUT_DIR / "models" / "pubmedbert"
 PLOT_DIR = OUT_DIR / "plots"
+
+
+def relpath(path: Path) -> str:
+    return path.resolve().relative_to(ROOT).as_posix()
 
 
 def load_full_terms_from_xlsx(path: Path) -> pd.DataFrame:
@@ -108,9 +107,10 @@ def run() -> Dict[str, object]:
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
-    if not INPUT_XLSX.exists():
-        raise FileNotFoundError(f"Input xlsx not found: {INPUT_XLSX}")
-    full_df = load_full_terms_from_xlsx(INPUT_XLSX)
+    if INPUT_XLSX.exists():
+        full_df = load_full_terms_from_xlsx(INPUT_XLSX)
+    else:
+        full_df = load_synthetic_full_terms(INPUT_XLSX)
     doc_ids = sorted(int(v) for v in full_df["doc_id"].unique())
     split = math.ceil(len(doc_ids) * 0.6)
     train_doc_ids = doc_ids[:split]
@@ -187,7 +187,7 @@ def run() -> Dict[str, object]:
 
     summary = {
         "method": "list_to_state_then_crc",
-        "input_xlsx": str(INPUT_XLSX),
+        "input_data": relpath(INPUT_XLSX) if INPUT_XLSX.exists() else "sample_full_terms.csv",
         "simulation_seed_train": SIM_SEED,
         "simulation_seed_test": SIM_SEED + 1,
         "n_full_terms": int(len(full_df)),
@@ -212,15 +212,15 @@ def run() -> Dict[str, object]:
             },
         },
         "paths": {
-            "precision_hist": str(PLOT_DIR / "precision_hist.png"),
-            "recall_hist": str(PLOT_DIR / "recall_hist.png"),
-            "summary_barplot": str(PLOT_DIR / "summary_barplot.png"),
-            "train_list1": str(DATA_DIR / "train_list1.csv"),
-            "train_list2": str(DATA_DIR / "train_list2.csv"),
-            "train_visible": str(DATA_DIR / "train_reconstructed_visible.csv"),
-            "test_list1": str(DATA_DIR / "test_list1.csv"),
-            "test_list2": str(DATA_DIR / "test_list2.csv"),
-            "test_visible": str(DATA_DIR / "test_reconstructed_visible.csv"),
+            "precision_hist": relpath(PLOT_DIR / "precision_hist.png"),
+            "recall_hist": relpath(PLOT_DIR / "recall_hist.png"),
+            "summary_barplot": relpath(PLOT_DIR / "summary_barplot.png"),
+            "train_list1": relpath(DATA_DIR / "train_list1.csv"),
+            "train_list2": relpath(DATA_DIR / "train_list2.csv"),
+            "train_visible": relpath(DATA_DIR / "train_reconstructed_visible.csv"),
+            "test_list1": relpath(DATA_DIR / "test_list1.csv"),
+            "test_list2": relpath(DATA_DIR / "test_list2.csv"),
+            "test_visible": relpath(DATA_DIR / "test_reconstructed_visible.csv"),
         },
         "train_summary": train_summary,
     }

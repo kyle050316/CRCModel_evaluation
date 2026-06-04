@@ -1,14 +1,9 @@
 import json
 import random
-import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 import pandas as pd
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 from crc_functions import build_state_table_from_two_lists, write_table
 from synthetic_pipeline import SIM_SEED, load_synthetic_full_terms, sampling_probabilities
@@ -16,6 +11,10 @@ from synthetic_pipeline import SIM_SEED, load_synthetic_full_terms, sampling_pro
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
+
+
+def relpath(path: Path) -> str:
+    return path.resolve().relative_to(ROOT).as_posix()
 
 
 def simulate_two_lists(full_df: pd.DataFrame, seed: int = SIM_SEED) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -103,10 +102,10 @@ def main() -> None:
 
     report = validate_reconstruction(reconstructed, expected_visible, n_list1=len(list1), n_list2=len(list2))
     report["paths"] = {
-        "list1": str(DATA_DIR / "simulated_list1.csv"),
-        "list2": str(DATA_DIR / "simulated_list2.csv"),
-        "expected": str(DATA_DIR / "expected_visible_from_simulation.csv"),
-        "reconstructed": str(DATA_DIR / "reconstructed_visible_states.csv"),
+        "list1": relpath(DATA_DIR / "simulated_list1.csv"),
+        "list2": relpath(DATA_DIR / "simulated_list2.csv"),
+        "expected": relpath(DATA_DIR / "expected_visible_from_simulation.csv"),
+        "reconstructed": relpath(DATA_DIR / "reconstructed_visible_states.csv"),
     }
     with open(DATA_DIR / "validation_report.json", "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)

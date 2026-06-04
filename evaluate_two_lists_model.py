@@ -16,10 +16,21 @@ from transformers import AutoModel, AutoTokenizer
 
 MatchMethod = Literal["character", "ai"]
 AiMatcher = Callable[[str], str | Dict[str, object] | List[Dict[str, object]]]
-PUBMEDBERT_PATH = str(Path.home() / ".cache/huggingface/hub/models--microsoft--BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext/snapshots/e1354b7a3a09615f6aba48dfad4b7a613eef7062")
+PUBMEDBERT_PATH = os.environ.get(
+    "PUBMEDBERT_PATH",
+    str(Path.home() / ".cache/huggingface/hub/models--microsoft--BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext/snapshots/e1354b7a3a09615f6aba48dfad4b7a613eef7062"),
+)
 REQUIRED_COLUMNS = ["doc_id", "phrase", "type", "state", "context"]
 EPS = 1e-6
 MAX_ABS_WEIGHT = 1e6
+
+
+def relative_to_cwd(path: str | os.PathLike) -> str:
+    path_obj = Path(path).resolve()
+    try:
+        return path_obj.relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return str(path_obj)
 
 
 AI_MATCH_PROMPT_TEMPLATE = """You are evaluating pairs of clinical/medical terms extracted from the SAME piece of text.
@@ -584,7 +595,7 @@ def train_q_from_table(
         "n_val_rows": int(len(val_idx)),
         "config": config.__dict__,
         "heads": summaries,
-        "q_function_path": str(Path(out_dir) / "q_function.pt"),
+        "q_function_path": relative_to_cwd(Path(out_dir) / "q_function.pt"),
     }
     with open(Path(out_dir) / "train_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary_out, f, indent=2, ensure_ascii=False)
@@ -719,11 +730,11 @@ def evaluate_two_lists_with_model(
         "matching_method": method,
         "estimate": estimate,
         "paths": {
-            "q_training_table": str(q_train_path),
-            "evaluation_table": str(eval_path),
-            "matches": str(match_path),
-            "q_function": str(model_dir / "q_function.pt"),
-            "estimate_dir": str(estimate_dir),
+            "q_training_table": relative_to_cwd(q_train_path),
+            "evaluation_table": relative_to_cwd(eval_path),
+            "matches": relative_to_cwd(match_path),
+            "q_function": relative_to_cwd(model_dir / "q_function.pt"),
+            "estimate_dir": relative_to_cwd(estimate_dir),
         },
         "train_summary": train_summary,
     }

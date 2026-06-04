@@ -24,6 +24,32 @@ summary = evaluate_two_lists_with_model(
 )
 ```
 
+## Running This Folder Independently
+
+This folder is self-contained for the two-list reconstruction and matching
+code paths. It uses the bundled `sample_full_terms.csv` demo data if the full
+synthetic Excel workbook is not present. Run the lightweight validation with:
+
+```bash
+python3 build_two_lists_and_validate.py
+```
+
+Expected outputs are written with relative paths under `data/`.
+
+The full CRC q-function training path uses a local PubMedBERT checkpoint through
+Hugging Face `local_files_only=True`. If the checkpoint is not already in the
+default cache on a new machine, set:
+
+```bash
+export PUBMEDBERT_PATH=/path/to/local/pubmedbert/checkpoint
+```
+
+Then run the full simulation with:
+
+```bash
+python3 run_list_state_simulation.py
+```
+
 The returned `summary` is a dictionary containing:
 
 - input row counts,
@@ -183,7 +209,7 @@ If `q_function` is not provided, `evaluate_two_lists_with_model()` trains a q-fu
 
 The new model predictions are not used to train q. They are used only to create the `matched` column for precision/recall estimation.
 
-The default q-function setup uses the parent project's PubMedBERT configuration:
+The default q-function setup uses the local `PUBMEDBERT_PATH` configuration:
 
 ```text
 phrase [SEP] semantic type <type> [SEP] context <context>
@@ -246,4 +272,3 @@ evaluation_outputs/evaluation_summary.json
 `model_human_matches.csv` contains model-human match details.
 
 `evaluation_summary.json` contains the final metrics and paths.
-
