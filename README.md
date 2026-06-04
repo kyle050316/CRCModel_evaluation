@@ -1,172 +1,70 @@
 # Two-List CRC Model Evaluation
 
-本项目用于评估一个新的医学术语抽取模型。核心思想是：当只有两份不完整人工标注列表时，先把两份列表合并成可观察状态 `10`、`01`、`11`，再训练 q-function 估计漏标偏差，最后给出朴素指标和 CRC 校正后的 precision / recall。
+This project evaluates a model's clinical term extraction performance when the available human annotations are incomplete. It combines two partially observed annotation lists into visible capture states, trains a q-function to estimate missing-annotation bias, and reports both naive and CRC-corrected precision and recall.
 
-## 当前运行结论
+## What The Code Does
 
-我在当前目录运行过代码，环境为 `Python 3.11.9`。
+The workflow has three main stages:
 
-### 成功运行的命令
+1. Build a visible state table from two annotation lists.
+2. Match model predictions against the visible human terms to create a `matched` label.
+3. Train or load a q-function and estimate naive and CRC-corrected metrics.
 
-```bash
-python3 run_list_state_simulation.py
-python3 simulation_bootstrap_validation.py
-python3 build_two_lists_and_validate.py
-python3 CRCModel_evaluation_full_review/build_two_lists_and_validate.py
-```
+The visible states are:
 
-`run_list_state_simulation.py` 和 `simulation_bootstrap_validation.py` 是同一条完整模拟流程，运行结果一致：
+| State | Meaning |
+| --- | --- |
+| `10` | The term appears only in list 1. |
+| `01` | The term appears only in list 2. |
+| `11` | The term appears in both lists. |
 
-| 指标 | 结果 |
-| --- | ---: |
-| full terms | 1737 |
-| train reconstructed visible | 909 |
-| test reconstructed visible | 597 |
-| train state counts | `11=452`, `10=296`, `01=161` |
-| test state counts | `11=289`, `10=183`, `01=125` |
-| true precision | 0.9455 |
-| true recall | 0.6565 |
-| naive precision mean | 0.8285 |
-| naive recall mean | 0.6608 |
-| CRC corrected precision mean | 0.9232 |
-| CRC corrected recall mean | 0.6563 |
-| bootstrap resamples | 1000 |
+Rows with state `00` are not visible in either list and are not included in the observed table.
 
-解释：朴素 precision 明显低估真实 precision，CRC 校正后 precision 从 `0.8285` 提高到 `0.9232`，更接近 full truth 的 `0.9455`。recall 本来偏差较小，校正后 `0.6563` 基本贴近真实值 `0.6565`。
+## Repository Layout
 
-完整输出写入：
+| Path | Purpose |
+| --- | --- |
+| `evaluate_two_lists_model.py` | Main API for evaluating user-provided lists and model predictions. |
+| `model_term_matching.py` | Utilities for character-based or AI-assisted term matching. |
+| `build_two_lists_and_validate.py` | Lightweight validation script for reconstructing visible states from two simulated lists. |
+| `run_list_state_simulation.py` | Full synthetic simulation, q-function training, bootstrap evaluation, and plot generation. |
+| `simulation_bootstrap_validation.py` | Thin wrapper around `run_list_state_simulation.py`. |
+| `crc_functions.py` | Helper functions for state-table construction, q-function training, plotting, and table output. |
+| `synthetic_pipeline.py` | Synthetic data loading, sampling, bootstrap logic, and plotting helpers. |
+| `data/` | Output folder for the lightweight two-list reconstruction validation. |
+| `simulation_outputs/` | Output folder for full simulation data, models, metrics, and plots. |
 
-```text
-simulation_outputs/
-simulation_outputs/data/
-simulation_outputs/models/pubmedbert/
-simulation_outputs/plots/
-```
+## Requirements
 
-图像结果在：
-
-```text
-simulation_outputs/plots/precision_hist.png
-simulation_outputs/plots/recall_hist.png
-simulation_outputs/plots/summary_barplot.png
-```
-
-### 独立运行修复说明
-
-最初根目录脚本不能完全独立运行，原因有两个：
-
-1. `run_list_state_simulation.py`、`build_two_lists_and_validate.py` 和 `model_term_matching.py` 把上一级目录加入了 `sys.path` 最前面，所以会优先导入上一级的 `crc_functions.py` 和 `synthetic_pipeline.py`。
-2. 当前目录缺少独立运行需要的 `crc_functions.py` 和 `synthetic_pipeline.py`，并且默认 Excel 文件名和当前真实文件名不一致。
-
-现在已经修复：
-
-1. 根目录已补充 `crc_functions.py` 和 `synthetic_pipeline.py`。
-2. 三个入口文件已改为当前目录优先导入。
-3. `synthetic_pipeline.py` 已兼容当前存在的 `mimic_iii_synthetic_term_extraction_50_long_full_context-2 2.xlsx`。
-
-因此根目录现在可以直接运行：
-
-```bash
-python3 build_two_lists_and_validate.py
-```
-
-该命令已成功，结果如下：
-
-```json
-{
-  "n_list1": 1222,
-  "n_list2": 1002,
-  "n_reconstructed_visible": 1493,
-  "n_expected_visible": 1493,
-  "keys_equal": true,
-  "state_equal": true,
-  "matched_equal": true,
-  "state_mismatch_count": 0,
-  "reconstructed_state_counts": {
-    "11": 731,
-    "10": 491,
-    "01": 271
-  }
-}
-```
-
-## 安装依赖
-
-推荐先进入项目根目录：
-
-```bash
-cd /Users/kylewang/Desktop/GENIE/CRCmodel/CRCevaluation_20260422/list_state_extension
-```
-
-安装依赖：
+Install the Python dependencies:
 
 ```bash
 python3 -m pip install pandas numpy torch transformers matplotlib openpyxl
 ```
 
-完整 q-function 训练需要本机已经有 PubMedBERT 模型缓存。当前代码默认路径是：
+The full q-function training path uses a local PubMedBERT checkpoint through Hugging Face with `local_files_only=True`. The default path is set in `evaluate_two_lists_model.py`:
 
 ```text
 ~/.cache/huggingface/hub/models--microsoft--BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext/snapshots/e1354b7a3a09615f6aba48dfad4b7a613eef7062
 ```
 
-代码使用 `local_files_only=True`，所以新机器上如果没有这个缓存，需要先下载模型或把 `PUBMEDBERT_PATH` 改成你的本地模型目录。
+If the checkpoint is not present, download PubMedBERT locally or update `PUBMEDBERT_PATH` / `TrainConfig.model_path` to point to an available local model directory.
 
-## 文件说明
+## Quick Start
 
-| 文件或目录 | 功能 |
-| --- | --- |
-| `README.md` | 项目说明和运行教程。 |
-| `run_list_state_simulation.py` | 完整模拟入口：读取 Excel，模拟 train/test 两份人工列表，重建可观察状态，训练 q-function，bootstrap 评估并画图。 |
-| `simulation_bootstrap_validation.py` | 轻量入口文件，内部直接调用 `run_list_state_simulation.run()`，因此结果与完整模拟入口一致。 |
-| `build_two_lists_and_validate.py` | 两列表重建验证脚本；当前已可在根目录独立运行。 |
-| `evaluate_two_lists_model.py` | 核心 API 文件，提供两列表合并、模型匹配、q-function 训练、precision/recall 估计和一站式 `evaluate_two_lists_with_model()`。 |
-| `model_term_matching.py` | 单独的术语匹配工具，支持字符匹配和 AI 匹配，把模型预测与人工可见表对齐并生成 `matched`。 |
-| `crc_functions.py` | CRC 相关辅助函数：状态表构造、q-function 训练包装、指标图绘制、表格读写。 |
-| `synthetic_pipeline.py` | 合成数据读取、采样概率、bootstrap、真实指标计算和直方图绘制。 |
-| `CRCModel_evaluation_full_review/` | 更自包含的一份完整代码副本，包含 `crc_functions.py`、`synthetic_pipeline.py`、`requirements.txt` 和同名运行脚本。 |
-| `data/` | 根目录两列表验证输出数据，包括模拟列表、期望可见状态、重建状态和验证报告。 |
-| `simulation_outputs/` | 完整模拟输出，包括 train/test CSV、q-function 模型、训练摘要、bootstrap 摘要和图。 |
-| `mimic_iii_synthetic_term_extraction_50_long_full_context-2 2.xlsx` | 根目录完整模拟使用的 Excel 输入。 |
+Run commands from the project folder:
 
-## 核心概念
-
-两份人工列表按以下键合并：
-
-```text
-doc_id, phrase, type, context
+```bash
+cd /Users/kylewang/Desktop/GENIE/CRCmodel/CRCevaluation_20260422/list_state_extension
 ```
 
-生成的状态：
-
-| state | 含义 |
-| --- | --- |
-| `10` | 只出现在 list 1 |
-| `01` | 只出现在 list 2 |
-| `11` | 同时出现在 list 1 和 list 2 |
-| `00` | 两份列表都没标到，不可观察，不会出现在可见表中 |
-
-q-function 训练三个二分类头：
-
-| head | 预测目标 |
-| --- | --- |
-| `q1` | `state` 属于 `10` 或 `11` |
-| `q2` | `state` 属于 `01` 或 `11` |
-| `q12` | `state == 11` |
-
-`matched` 表示某个人工可见 term 是否被新模型预测命中。q-function 训练不使用 `matched`，`matched` 只用于最终 precision / recall 估计。
-
-## 运行教程
-
-### 1. 验证两列表能否正确重建状态
-
-在根目录直接运行：
+Validate two-list state reconstruction:
 
 ```bash
 python3 build_two_lists_and_validate.py
 ```
 
-输出文件：
+This writes:
 
 ```text
 data/simulated_list1.csv
@@ -176,21 +74,30 @@ data/reconstructed_visible_states.csv
 data/validation_report.json
 ```
 
-如果 `keys_equal=true`、`state_equal=true`、`matched_equal=true`，说明两列表重建逻辑与模拟真值一致。
+A successful validation has:
 
-### 2. 运行完整模拟和 CRC 校正评估
+```json
+{
+  "keys_equal": true,
+  "state_equal": true,
+  "matched_equal": true,
+  "state_mismatch_count": 0
+}
+```
+
+Run the full synthetic simulation:
 
 ```bash
 python3 run_list_state_simulation.py
 ```
 
-或：
+Equivalent wrapper:
 
 ```bash
 python3 simulation_bootstrap_validation.py
 ```
 
-主要输出：
+The full simulation writes:
 
 ```text
 simulation_outputs/simulation_summary.json
@@ -207,38 +114,61 @@ simulation_outputs/plots/recall_hist.png
 simulation_outputs/plots/summary_barplot.png
 ```
 
-看结果时优先打开：
+## Expected Simulation Output
 
-```text
-simulation_outputs/simulation_summary.json
-simulation_outputs/plots/summary_barplot.png
-```
+The bundled simulation data produces approximately:
 
-三个图的含义：
+| Metric | Value |
+| --- | ---: |
+| Full terms | 1737 |
+| Train reconstructed visible rows | 909 |
+| Test reconstructed visible rows | 597 |
+| Train state counts | `11=452`, `10=296`, `01=161` |
+| Test state counts | `11=289`, `10=183`, `01=125` |
+| Full-truth precision | 0.9455 |
+| Full-truth recall | 0.6565 |
+| Naive precision mean | 0.8285 |
+| Naive recall mean | 0.6608 |
+| CRC-corrected precision mean | 0.9232 |
+| CRC-corrected recall mean | 0.6563 |
+| Bootstrap resamples | 1000 |
 
-| 图像 | 含义 |
+The key result is that naive precision is biased downward under incomplete annotations. The CRC-corrected precision is closer to the full-truth precision, while recall remains close to the full-truth value.
+
+The plot files summarize this visually:
+
+| Plot | Description |
 | --- | --- |
-| `precision_hist.png` | bootstrap 下 CRC 校正 precision 与朴素 precision 的分布，并用虚线标出 full truth。 |
-| `recall_hist.png` | bootstrap 下 CRC 校正 recall 与朴素 recall 的分布，并用虚线标出 full truth。 |
-| `summary_barplot.png` | full truth、naive visible mean、CRC corrected mean 的 precision / recall 柱状对比。 |
+| `precision_hist.png` | Bootstrap distributions for naive and CRC-corrected precision, with full-truth precision marked. |
+| `recall_hist.png` | Bootstrap distributions for naive and CRC-corrected recall, with full-truth recall marked. |
+| `summary_barplot.png` | Bar plot comparing full truth, naive visible mean, and CRC-corrected mean. |
 
-### 3. 用自己的两份人工列表和模型预测评估
+## Input Format For User Data
 
-输入格式：
-
-`list1_df` 和 `list2_df` 必须包含：
+`list1_df` and `list2_df` must contain:
 
 ```text
 doc_id, phrase, type, context
 ```
 
-`model_df` 必须包含：
+`model_df` must contain:
 
 ```text
 doc_id, phrase, type
 ```
 
-最小示例：
+Recommended meaning of each field:
+
+| Column | Meaning |
+| --- | --- |
+| `doc_id` | Document, note, or record identifier. |
+| `phrase` | Extracted clinical term text. |
+| `type` | Semantic type label or UMLS semantic type code. |
+| `context` | Source text context for the extracted term. |
+
+## Evaluate A Model With Two Lists
+
+Use `evaluate_two_lists_with_model()` for the main evaluation path:
 
 ```python
 import pandas as pd
@@ -281,7 +211,7 @@ summary = evaluate_two_lists_with_model(
 print(summary)
 ```
 
-输出目录：
+The output directory contains:
 
 ```text
 evaluation_outputs/data/q_training_visible_terms.csv
@@ -293,7 +223,11 @@ evaluation_outputs/estimate/estimate_two_list_pubmedbert.json
 evaluation_outputs/evaluation_summary.json
 ```
 
-如果已有训练好的 q-function，可以跳过重新训练：
+`q_training_visible_terms.csv` contains the reconstructed two-list visible state table without `matched`; it is used to train q. `evaluation_visible_terms.csv` contains the same state table plus `matched`, which is created by comparing model predictions with visible human terms.
+
+## Reuse An Existing Q-Function
+
+If a q-function has already been trained, load it and pass it into the evaluator:
 
 ```python
 from evaluate_two_lists_model import QFunction, evaluate_two_lists_with_model
@@ -309,28 +243,22 @@ summary = evaluate_two_lists_with_model(
 )
 ```
 
-## 匹配方式
+Pass `pred_total` when the denominator for precision is not exactly `len(model_df)`.
 
-### 字符匹配
+## Matching Methods
 
-默认方式是 `method="character"`。它会做大小写、空格、简单标点和部分 UMLS 语义类型规范化。
+### Character Matching
 
-例如在 `evaluate_two_lists_model.py` 中：
+`method="character"` is deterministic. It normalizes case, whitespace, simple punctuation, and common semantic type codes. For example, `T047` and `Disease or Syndrome` are treated as equivalent semantic types.
 
-```text
-hypertension + T047
-hypertension + Disease or Syndrome
-```
+This method is conservative and does not infer synonyms such as `high blood pressure` and `hypertension`.
 
-会被认为是同一类型并可合并为 `state=11`。
+### AI Matching
 
-### AI 匹配
-
-当需要识别同义词、缩写、改写时，可以使用 `method="ai"`，并传入一个 `ai_matcher(prompt)` 函数。
+Use `method="ai"` when synonym, abbreviation, or paraphrase matching is needed. Provide an `ai_matcher(prompt)` function that returns valid JSON:
 
 ```python
 def ai_matcher(prompt: str) -> str:
-    # 调用你的大模型服务，返回 JSON 字符串
     return '{"matches": [{"h_idx": 0, "g_idx": 0, "phrase_match": true, "type_match": true}]}'
 
 summary = evaluate_two_lists_with_model(
@@ -342,7 +270,7 @@ summary = evaluate_two_lists_with_model(
 )
 ```
 
-AI 返回格式必须是 JSON：
+Expected JSON schema:
 
 ```json
 {
@@ -357,11 +285,29 @@ AI 返回格式必须是 JSON：
 }
 ```
 
-只有 `phrase_match=true` 的配对会被使用。
+Only pairs with `phrase_match=true` are used.
 
-## 注意事项
+## Q-Function Details
 
-1. 根目录和 `CRCModel_evaluation_full_review/` 目录仍有重复代码；根目录现在已经可以独立运行，后续建议以根目录为主。
-2. `evaluate_two_lists_model.py` 中的两列表合并会规范化 `T047` 与 `Disease or Syndrome` 这类类型；`model_term_matching.py` 当前走到的重建路径可能不会把这两个类型合并，因此小样例会出现 `10` 和 `01` 两行。这一点在实际评估时建议优先使用 `evaluate_two_lists_model.py` 的一站式 API。
-3. 完整训练依赖本地 PubMedBERT 缓存；如果模型路径不存在，训练会失败，需要先准备本地模型。
-4. 如果模型真实预测总数不等于 `len(model_df)`，请手动传入 `pred_total`，否则 precision 的分母会不准确。
+The default q-function uses text inputs of the form:
+
+```text
+phrase [SEP] semantic type <type> [SEP] context <context>
+```
+
+It trains three binary heads:
+
+| Head | Label |
+| --- | --- |
+| `q1` | `state` is `10` or `11`. |
+| `q2` | `state` is `01` or `11`. |
+| `q12` | `state` is `11`. |
+
+Model predictions are not used to train q. They are used only to create the `matched` column for precision and recall estimation.
+
+## Notes
+
+- The project folder is designed to run independently from this directory.
+- The full simulation expects the bundled Excel file `mimic_iii_synthetic_term_extraction_50_long_full_context-2 2.xlsx` or the default synthetic Excel filename handled by `synthetic_pipeline.py`.
+- Full q-function training requires a local PubMedBERT checkpoint.
+- For real evaluations, prefer the one-step API in `evaluate_two_lists_model.py`.
