@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+
+# Generated outputs. Regenerate these locally.
+data/
+simulation_outputs/
+evaluation_outputs/
+
+# Local runtime/cache noise.
+.DS_Store
+.pytest_cache/
