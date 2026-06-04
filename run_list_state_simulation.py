@@ -11,7 +11,6 @@ from crc_functions import (
     PUBMEDBERT_PATH,
     TrainConfig,
     build_state_table_from_two_lists,
-    draw_metric_barplot,
     train_q_from_excel,
     write_table,
 )
@@ -20,6 +19,7 @@ from synthetic_pipeline import (
     BOOTSTRAP_BASE_SEED,
     SIM_SEED,
     bootstrap_once,
+    load_synthetic_full_terms,
     normalize_text,
     plot_hist_two,
     read_xlsx_sheet,
@@ -178,13 +178,6 @@ def run() -> Dict[str, object]:
     plot_hist_two(prec_corr, prec_naive, truth["precision_true"], "List-based simulation precision", "Precision", PLOT_DIR / "precision_hist.png")
     plot_hist_two(rec_corr, rec_naive, truth["recall_true"], "List-based simulation recall", "Recall", PLOT_DIR / "recall_hist.png")
 
-    bar_rows = [
-        {"method": "Full truth", "precision": truth["precision_true"], "recall": truth["recall_true"]},
-        {"method": "Naive visible mean", "precision": float(prec_naive.mean()), "recall": float(rec_naive.mean())},
-        {"method": "CRC corrected mean", "precision": float(prec_corr.mean()), "recall": float(rec_corr.mean())},
-    ]
-    draw_metric_barplot(bar_rows, PLOT_DIR / "summary_barplot.png")
-
     summary = {
         "method": "list_to_state_then_crc",
         "input_data": relpath(INPUT_XLSX) if INPUT_XLSX.exists() else "sample_full_terms.csv",
@@ -214,7 +207,6 @@ def run() -> Dict[str, object]:
         "paths": {
             "precision_hist": relpath(PLOT_DIR / "precision_hist.png"),
             "recall_hist": relpath(PLOT_DIR / "recall_hist.png"),
-            "summary_barplot": relpath(PLOT_DIR / "summary_barplot.png"),
             "train_list1": relpath(DATA_DIR / "train_list1.csv"),
             "train_list2": relpath(DATA_DIR / "train_list2.csv"),
             "train_visible": relpath(DATA_DIR / "train_reconstructed_visible.csv"),
