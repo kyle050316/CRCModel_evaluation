@@ -19,6 +19,7 @@ from crc_functions import EPS, MAX_ABS_WEIGHT
 
 ROOT = Path(__file__).resolve().parent
 SYNTHETIC_XLSX = ROOT / "mimic_iii_synthetic_term_extraction_50_long_full_context-2.xlsx"
+ALT_SYNTHETIC_XLSX = ROOT / "mimic_iii_synthetic_term_extraction_50_long_full_context-2 2.xlsx"
 SAMPLE_CSV = ROOT / "sample_full_terms.csv"
 
 BOOTSTRAP_B = 1000
@@ -92,6 +93,8 @@ def simulated_match_probability(type_text: str) -> float:
 
 
 def load_synthetic_full_terms(path: Path = SYNTHETIC_XLSX) -> pd.DataFrame:
+    if not path.exists() and path == SYNTHETIC_XLSX and ALT_SYNTHETIC_XLSX.exists():
+        path = ALT_SYNTHETIC_XLSX
     if not path.exists() and SAMPLE_CSV.exists():
         return pd.read_csv(SAMPLE_CSV)
     terms = read_xlsx_sheet(path, "xl/worksheets/sheet1.xml")
