@@ -44,9 +44,11 @@ Task:
 Return the best one-to-one matches between human and model terms.
 
 PHRASE:
-- Compare the meaning of the two terms in THIS text.
+- Compare the clinical meaning of the two terms in THIS text, not just their surface characters.
 - Normalize case and whitespace.
-- Treat clear synonyms, abbreviations, and paraphrases as equal only when unambiguous in THIS text.
+- Treat clear medical synonyms, professional-vs-lay terms, abbreviations, acronyms, spelling variants, and paraphrases as equal only when unambiguous in THIS text.
+- Expand and interpret abbreviations using the local context when possible. For example, match an abbreviation to its full form only when the surrounding text supports that meaning.
+- Prefer semantic equivalence over exact wording. Different strings can match if they denote the same clinical concept.
 - phrase_match=true ONLY when the two terms refer to essentially the SAME clinical concept with the SAME level of specificity and scope.
 - Do NOT match generic vs specific or supertype vs subtype.
   Examples where phrase_match=false:
@@ -57,7 +59,10 @@ PHRASE:
   Examples where phrase_match=true:
   - "myocardial infarction" vs "heart attack"
   - "high blood pressure" vs "hypertension"
+  - "HTN" vs "hypertension"
+  - "DM2" vs "type 2 diabetes mellitus"
   - "SOB" vs "shortness of breath" when the text makes that abbreviation clear
+  - "ceftriaxone" vs "Rocephin" when they refer to the same medication in context
 - If unsure whether they are exactly the same concept, default to phrase_match=false.
 
 TYPE:
