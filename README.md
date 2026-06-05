@@ -1,14 +1,8 @@
 # Two-List CRC Model Evaluation
 
-This project evaluates clinical term extraction when human annotations are incomplete. It reconstructs visible capture states from two annotation lists, matches model predictions to visible human terms, trains a q-function for capture probabilities, and reports naive and CRC-corrected metrics.
+This project is designed to evaluate clinical term extraction systems when human annotations are incomplete. It reconstructs observable capture states from two annotation lists, matches model predictions against visible human-annotated terms, trains a q-function to estimate capture probabilities, and reports both naive metrics and CRC-corrected metrics.
 
-The recommended synthetic validation entry point is:
-
-```bash
-python3 synthetic_bootstrap.py
-```
-
-This script simulates the same three inputs used in real evaluation:
+The workflow simulates the three inputs used in a real evaluation:
 
 ```text
 list1_df: terms captured by annotator/list 1
@@ -16,56 +10,42 @@ list2_df: terms captured by annotator/list 2
 model_df: explicit synthetic model predictions
 ```
 
-Ground truth metrics use hidden synthetic truth. Naive and CRC metrics are computed through the real matcher-based path from `list1_df`, `list2_df`, and `model_df`.
+Ground-truth metrics are computed using hidden synthetic truth. Naive and CRC metrics are computed from the two simulated incomplete annotation lists, using `list1_df`, `list2_df`, and the model output under evaluation (`model_df`).
 
 ## Workflow
 
-Two observed lists define the visible capture state of each term:
+The two observed lists define the visible capture state of each term:
 
-| State | Meaning |
-| --- | --- |
-| `10` | The term appears only in list 1. |
-| `01` | The term appears only in list 2. |
-| `11` | The term appears in both lists. |
+| State | Meaning                          |
+| ----- | -------------------------------- |
+| `10`  | The term appears only in list 1. |
+| `01`  | The term appears only in list 2. |
+| `11`  | The term appears in both lists.  |
 
-Rows with state `00` are hidden from both lists and are not included in the observed table.
+Rows with state `00` are hidden from both lists and therefore do not appear in the observed table.
 
 The evaluation pipeline is:
 
-1. Build a visible state table from `list1_df` and `list2_df`.
-2. Match visible human terms to `model_df` with character or AI matching.
-3. Train or load a q-function that estimates `q1`, `q2`, and `q12`.
+1. Construct the visible state table from `list1_df` and `list2_df`.
+2. Match visible human terms against `model_df` using either character matching or AI-assisted matching.
+3. Train or load a q-function to estimate `q1`, `q2`, and `q12`.
 4. Compute naive and CRC-corrected precision, recall, and type accuracy.
 
-## Repository Layout
+## Repository Structure
 
-| Path | Purpose |
-| --- | --- |
-| `evaluate_two_lists_model.py` | Main API for real user-provided lists and model predictions. |
-| `synthetic_bootstrap.py` | Recommended synthetic validation: simulates `list1_df`, `list2_df`, and `model_df`, then evaluates through the real matcher-based path and plots CRC metrics. |
-| `type_match_accuracy.py` | Older standalone type-accuracy bootstrap experiment. The recommended path is now `synthetic_bootstrap.py`. |
-| `model_term_matching.py` | Standalone utilities for character-based or AI-assisted term matching. |
-| `build_two_lists_and_validate.py` | Lightweight validation of two-list state reconstruction. Does not train PubMedBERT. |
-| `run_list_state_simulation.py` | Older synthetic simulation that directly uses generated synthetic match labels rather than an explicit synthetic `model_df`. |
-| `simulation_bootstrap_validation.py` | Wrapper around `run_list_state_simulation.py`. |
-| `crc_functions.py` | Helper wrappers for state-table construction, q-function training, and table output. |
-| `synthetic_pipeline.py` | Synthetic workbook loading, sampling probabilities, bootstrap helpers, and plotting helpers. |
-| `mimic_iii_synthetic_term_extraction_50_long_full_context-2.xlsx` | Synthetic source workbook with extracted terms and source notes. It does not contain a `matched` column. |
-| `sample_full_terms.csv` | Small fallback sample if the workbook is unavailable. |
+| Path                                                            | Purpose                                                                                                                                                         |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `evaluate_two_lists_model.py`                                   | Functions for evaluating real user-provided annotation lists and model predictions.                                                                             |
+| `synthetic_bootstrap.py`                                        | Synthetic validation: simulates `list1_df`, `list2_df`, and `model_df`, evaluates them through the real matcher-based pipeline, and generates CRC metric plots. |
+| `type_match_accuracy.py`                                        | Evaluates type extraction accuracy when the model has already extracted the correct phrase.                                                                     |
+| `model_term_matching.py`                                        | Character-based or AI-assisted term matching utilities.                                                                                                         |
+| `simulation_bootstrap_validation.py`                            | Wrapper around `run_list_state_simulation.py`.                                                                                                                  |
+| `crc_functions.py`                                              | Helper functions for state-table construction, q-function training, and output generation.                                                                      |
+| `synthetic_pipeline.py`                                         | Synthetic workbook loading, sampling probabilities, bootstrap utilities, and plotting helpers.                                                                  |
+| `mimic_iii_synthetic_term_extraction_50_long_full_context.xlsx` | A synthetic medical text and term extraction dataset generated with ChatGPT, containing 50 documents and more than 1,000 extracted terms.                       |
+| `sample_full_terms.csv`                                         | Sample example dataset.                                                                                                                                         |
 
 ## Requirements
-
-Install dependencies:
-
-```bash
-python3 -m pip install -r requirements.txt
-```
-
-or:
-
-```bash
-python3 -m pip install pandas numpy torch transformers matplotlib openpyxl
-```
 
 The q-function uses a local PubMedBERT checkpoint through Hugging Face with `local_files_only=True`. The default path is:
 
@@ -73,31 +53,14 @@ The q-function uses a local PubMedBERT checkpoint through Hugging Face with `loc
 ~/.cache/huggingface/hub/models--microsoft--BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext/snapshots/e1354b7a3a09615f6aba48dfad4b7a613eef7062
 ```
 
-If this checkpoint is missing, download PubMedBERT locally or set `PUBMEDBERT_PATH` / `TrainConfig.model_path` to an available local model directory.
+If the checkpoint is missing, download PubMedBERT locally or set `PUBMEDBERT_PATH` / `TrainConfig.model_path` to a valid local model directory.
 
 ## Quick Start
 
-Run commands from the project folder:
+Run commands from the project directory:
 
 ```bash
 cd /Users/kylewang/Desktop/CRCmodel_evaluation_20260604/CRCModel_evaluation
-```
-
-Validate two-list state reconstruction:
-
-```bash
-python3 build_two_lists_and_validate.py
-```
-
-A successful validation has:
-
-```json
-{
-  "keys_equal": true,
-  "state_equal": true,
-  "matched_equal": true,
-  "state_mismatch_count": 0
-}
 ```
 
 Generate the recommended synthetic CRC plots:
@@ -106,16 +69,16 @@ Generate the recommended synthetic CRC plots:
 python3 synthetic_bootstrap.py
 ```
 
-This reads the bundled workbook and simulates:
+This script reads the bundled workbook (`mimic_iii_synthetic_term_extraction_50_long_full_context.xlsx`) and simulates:
 
-| Simulated object | Output |
-| --- | --- |
-| `list1_df` | `simulation_outputs/real_entry/data/test_list1.csv` |
-| `list2_df` | `simulation_outputs/real_entry/data/test_list2.csv` |
-| `model_df` | `simulation_outputs/real_entry/data/test_model_predictions.csv` |
-| hidden full truth | `simulation_outputs/real_entry/data/test_full_truth.csv` |
+| Simulated Object  | Output                                                          |
+| ----------------- | --------------------------------------------------------------- |
+| `list1_df`        | `simulation_outputs/real_entry/data/test_list1.csv`             |
+| `list2_df`        | `simulation_outputs/real_entry/data/test_list2.csv`             |
+| `model_df`        | `simulation_outputs/real_entry/data/test_model_predictions.csv` |
+| hidden full truth | `simulation_outputs/real_entry/data/test_full_truth.csv`        |
 
-It then evaluates and bootstraps through matcher-generated labels. Outputs:
+It then performs evaluation and bootstrap analysis using matcher-generated labels. Outputs include:
 
 ```text
 simulation_outputs/real_entry/CRC_metrics_summary.json
@@ -125,41 +88,41 @@ simulation_outputs/real_entry/plots/CRC_recall.png
 simulation_outputs/real_entry/plots/CRC_type_accuracy.png
 ```
 
-Plot meanings:
+Plot descriptions:
 
-| Plot | Description |
-| --- | --- |
-| `CRC_precision.png` | Bootstrap distributions for naive and CRC-corrected precision, with hidden full-list truth marked. |
-| `CRC_recall.png` | Bootstrap distributions for naive and CRC-corrected recall, with hidden full-list truth marked. |
-| `CRC_type_accuracy.png` | Bootstrap distributions for naive and CRC-corrected type accuracy, with hidden full-list truth marked. |
+| Plot                    | Description                                                                                                           |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `CRC_precision.png`     | Bootstrap distribution of naive precision and CRC-corrected precision, with hidden full-list truth indicated.         |
+| `CRC_recall.png`        | Bootstrap distribution of naive recall and CRC-corrected recall, with hidden full-list truth indicated.               |
+| `CRC_type_accuracy.png` | Bootstrap distribution of naive type accuracy and CRC-corrected type accuracy, with hidden full-list truth indicated. |
 
-Latest bundled-data run:
+Most recent results using the bundled dataset:
 
-| Metric | Ground truth | CRC bootstrap mean | Naive bootstrap mean |
-| --- | ---: | ---: | ---: |
-| Precision | 0.8094 | 0.7899 | 0.7112 |
-| Recall | 0.5502 | 0.5497 | 0.5554 |
-| Type accuracy | 0.8571 | 0.8559 | 0.8596 |
+| Metric        | Ground Truth | CRC Bootstrap Mean | Naive Bootstrap Mean |
+| ------------- | ------------ | ------------------ | -------------------- |
+| Precision     | 0.8094       | 0.7899             | 0.7112               |
+| Recall        | 0.5502       | 0.5497             | 0.5554               |
+| Type Accuracy | 0.8571       | 0.8559             | 0.8596               |
 
-## How The Synthetic Data Is Built
+## How Synthetic Data Are Constructed
 
 The workbook contains extracted terms and source notes. It does not contain model predictions or a `matched` column.
 
 `synthetic_bootstrap.py` creates hidden synthetic truth and explicit model predictions:
 
-1. For each full ground-truth term, simulate whether the model got the phrase right: `phrase_match_truth`.
-2. Conditional on phrase match, simulate whether the semantic type is right: `type_match_truth`.
+1. For each full ground-truth term, simulate whether the model correctly extracts the phrase: `phrase_match_truth`.
+2. Conditional on phrase extraction, simulate whether the semantic type is correct: `type_match_truth`.
 3. Define `matched_truth = phrase_match_truth * type_match_truth`.
-4. Create one `model_df` row for each phrase-matched term. If type is wrong, the prediction keeps the phrase but uses a wrong semantic type.
-5. Add false-positive predictions so precision has a realistic denominator.
-6. Split terms by document into train/test.
-7. Simulate `list1_df` and `list2_df` capture from the full terms.
+4. Create one row in `model_df` for each phrase-matched term. If the type is incorrect, the prediction retains the phrase but uses an incorrect semantic type.
+5. Add false-positive predictions to provide a realistic precision denominator.
+6. Split terms into training and test sets by document.
+7. Simulate captures for `list1_df` and `list2_df` from the complete set of terms.
 
-Ground truth metrics use hidden columns from `test_full_truth.csv`. Naive and CRC metrics do not directly read those hidden columns; they are computed from matcher output between visible `list1_df` / `list2_df` terms and `model_df`.
+Ground-truth metrics use hidden columns in `test_full_truth.csv`. Naive and CRC metrics do not directly access these hidden columns; instead, they are computed from matcher outputs between visible `list1_df` / `list2_df` terms and `model_df`.
 
 ## Metric Definitions
 
-For hidden full truth:
+For the hidden full truth:
 
 ```text
 precision_true = sum(matched_truth) / len(model_df)
@@ -167,7 +130,7 @@ recall_true = sum(matched_truth) / number of full ground-truth terms
 type_accuracy_true = sum(matched_truth) / sum(phrase_match_truth)
 ```
 
-CRC uses the same capture weight for all three metrics:
+CRC uses the same capture weights for all three metrics:
 
 ```text
 w_i = ((r1_i / q1_i) + (r2_i / q2_i) - (r12_i / q12_i)) / pi_hat_i
@@ -182,7 +145,7 @@ CRC recall = sum(w_i * matched_i) / sum(w_i)
 CRC type accuracy = sum(w_i * phrase_match_i * type_match_i) / sum(w_i * phrase_match_i)
 ```
 
-The naive versions use the same numerators and denominators without `w_i`, restricted to visible rows.
+The naive versions use the same numerators and denominators but without `w_i`, and are restricted to visible rows only.
 
 ## Real Data Input Format
 
@@ -200,14 +163,14 @@ doc_id, phrase, type
 
 Recommended meanings:
 
-| Column | Meaning |
-| --- | --- |
-| `doc_id` | Document, note, or record identifier. |
-| `phrase` | Extracted clinical term text. |
-| `type` | Semantic type label or UMLS semantic type code. |
-| `context` | Source text context for the extracted term. |
+| Column    | Meaning                                           |
+| --------- | ------------------------------------------------- |
+| `doc_id`  | Document, note, or record identifier.             |
+| `phrase`  | Extracted clinical term text.                     |
+| `type`    | Semantic type label or UMLS semantic type code.   |
+| `context` | Source text context where the term was extracted. |
 
-## Evaluate Real Data
+## Evaluating Real Data
 
 Use `evaluate_two_lists_with_model()`:
 
@@ -237,7 +200,7 @@ evaluation_outputs/estimate/estimate_two_list_pubmedbert.json
 evaluation_outputs/evaluation_summary.json
 ```
 
-To reuse a trained q-function:
+To reuse a previously trained q-function:
 
 ```python
 from evaluate_two_lists_model import QFunction, evaluate_two_lists_with_model
@@ -257,21 +220,18 @@ summary = evaluate_two_lists_with_model(
 
 ### Character Matching
 
-`method="character"` is deterministic. It normalizes case, whitespace, simple punctuation, and common semantic type codes. For example, `T047` and `Disease or Syndrome` are treated as equivalent semantic types. It is conservative and does not infer synonyms such as `high blood pressure` and `hypertension`.
+`method="character"` is deterministic. It normalizes case, whitespace, simple punctuation, and common semantic type codes. For example, `T047` and `Disease or Syndrome` are treated as equivalent semantic types. This method is conservative and does not infer synonyms such as `high blood pressure` and `hypertension`.
 
 ### AI Matching
 
-`method="ai"` is for synonyms, abbreviations, acronyms, professional terms, and paraphrases. The built-in prompt emphasizes semantic clinical equivalence, including examples such as:
+`method="ai"` is suitable for synonyms, abbreviations, acronyms, domain-specific terminology, and paraphrases. The built-in prompt emphasizes clinical semantic equivalence, for example:
 
 ```text
 HTN <-> hypertension
 DM2 <-> type 2 diabetes mellitus
-SOB <-> shortness of breath
-myocardial infarction <-> heart attack
-ceftriaxone <-> Rocephin
 ```
 
-You provide an `ai_matcher(prompt)` function that sends the generated prompt to your AI API and returns valid JSON:
+You must provide an `ai_matcher(prompt)` function that sends the generated prompt to your AI API and returns valid JSON:
 
 ```python
 from openai import OpenAI
@@ -309,18 +269,18 @@ Only pairs with `phrase_match=true` are retained.
 
 ## Q-Function Details
 
-The default q-function input is:
+The default q-function input format is:
 
 ```text
 phrase [SEP] semantic type <type> [SEP] context <context>
 ```
 
-It trains three binary heads:
+It trains three binary classification heads:
 
-| Head | Label |
-| --- | --- |
-| `q1` | `state` is `10` or `11`. |
-| `q2` | `state` is `01` or `11`. |
-| `q12` | `state` is `11`. |
+| Head  | Label                    |
+| ----- | ------------------------ |
+| `q1`  | `state` is `10` or `11`. |
+| `q2`  | `state` is `01` or `11`. |
+| `q12` | `state` is `11`.         |
 
-Model predictions are not used to train q. They are used only to create match labels for evaluation.
+Model predictions are not used to train the q-function. Model predictions are only used to create the matching labels required for evaluation.
