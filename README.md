@@ -42,7 +42,7 @@ The evaluation pipeline is:
 | `simulation_bootstrap_validation.py`                            | Draw plot based on bootstrap simulation `run_list_state_simulation.py`.                                                                                         |
 | `crc_functions.py`                                              | Helper functions for state-table construction, q-function training, and output generation.                                                                      |
 | `synthetic_pipeline.py`                                         | Synthetic workbook loading, sampling probabilities, bootstrap utilities, and plotting helpers.                                                                  |
-| `mimic_iii_synthetic_term_extraction_50_long_full_context.xlsx` | A synthetic medical text and term extraction dataset generated with ChatGPT, containing 50 documents and more than 1,000 extracted terms.                       |
+| `mimic_iii_synthetic_term_extraction_50_long_full_context-2.xlsx` | A synthetic medical text and term extraction dataset generated with ChatGPT, containing 50 documents and more than 1,000 extracted terms.                       |
 | `sample_full_terms.csv`                                         | Sample example dataset.                                                                                                                                         |
 
 ## Requirements
@@ -60,7 +60,7 @@ If the checkpoint is missing, download PubMedBERT locally or set `PUBMEDBERT_PAT
 Run commands from the project directory:
 
 ```bash
-cd /Users/kylewang/Desktop/CRCmodel_evaluation_20260604/CRCModel_evaluation
+cd /Users/kylewang/Desktop/CRCmodel_evaluation_20260813/CRCModel_evaluation_github
 ```
 
 Generate the recommended synthetic CRC plots:
@@ -69,7 +69,7 @@ Generate the recommended synthetic CRC plots:
 python3 synthetic_bootstrap.py
 ```
 
-This script reads the bundled workbook (`mimic_iii_synthetic_term_extraction_50_long_full_context.xlsx`) and simulates:
+This script reads the bundled workbook (`mimic_iii_synthetic_term_extraction_50_long_full_context-2.xlsx`) and simulates:
 
 | Simulated Object  | Output                                                          |
 | ----------------- | --------------------------------------------------------------- |
@@ -119,6 +119,70 @@ The workbook contains extracted terms and source notes. It does not contain mode
 7. Simulate captures for `list1_df` and `list2_df` from the complete set of terms.
 
 Ground-truth metrics use hidden columns in `test_full_truth.csv`. Naive and CRC metrics do not directly access these hidden columns; instead, they are computed from matcher outputs between visible `list1_df` / `list2_df` terms and `model_df`.
+
+## Simulating the Algorithm When Only One Ground-Truth Annotation Is Available
+
+If only one complete ground-truth annotation is available, use it as a finite population of terms rather than as an observed list. Each term is represented by
+
+```text
+z = (doc_id, phrase, type, context)
+```
+
+For every term `z`, specify two capture probabilities:
+
+```text
+p1(z) = P(z is selected into list1 | z)
+p2(z) = P(z is selected into list2 | z)
+```
+
+Then generate the two observed lists with independent Bernoulli draws conditional on `z`:
+
+```python
+r1 = Bernoulli(p1(z))
+r2 = Bernoulli(p2(z))
+list1_df = truth_df[r1 == 1][["doc_id", "phrase", "type", "context"]]
+list2_df = truth_df[r2 == 1][["doc_id", "phrase", "type", "context"]]
+```
+
+This produces the four latent capture states `00`, `10`, `01`, and `11`. The `00` rows remain hidden from the evaluation input, while `10`, `01`, and `11` are reconstructed by `build_state_table_from_two_lists()`. Under the conditional independence simulation above, the expected joint probability is `p12(z) = p1(z) * p2(z)`. In a real application, dependence between lists should instead be represented by the learned `q12` head or by a simulation model that explicitly generates dependent draws.
+
+The recommended simulation sequence is:
+
+1. Start with one ground-truth table containing `doc_id`, `phrase`, `type`, and `context`.
+2. Define `p1(z)` and `p2(z)`. They may depend on term type, phrase difficulty, context length, document characteristics, or other known covariates.
+3. Sample `r1` and `r2` for every ground-truth term and construct `list1_df` and `list2_df`.
+4. Create or provide `model_df` independently. It must contain `doc_id`, `phrase`, and `type`; its rows are the model predictions being evaluated.
+5. Pass all three tables to the same production entry point:
+
+```python
+from evaluate_two_lists_model import evaluate_two_lists_with_model
+
+summary = evaluate_two_lists_with_model(
+    list1_df=list1_df,
+    list2_df=list2_df,
+    model_df=model_df,
+    output_dir="simulation_outputs/one_ground_truth",
+    method="character",
+    require_type_match=True,
+    pred_total=len(model_df),
+)
+```
+
+The function does not use the hidden full truth while estimating performance. It first reconstructs visible states from `list1_df` and `list2_df`, matches visible human terms to `model_df`, trains the q-function from the matched-free state table, and returns both naive and CRC-corrected estimates. The original full truth should only be retained for validation of the simulation, for example by comparing the estimates with metrics calculated directly from all rows in `truth_df`.
+
+### Comparison with the traditional evaluation
+
+The same simulated data can be evaluated in two ways:
+
+| Method | Input used for the metric | Interpretation |
+| --- | --- | --- |
+| Direct full-ground-truth evaluation | All rows in `truth_df` plus `model_df` | Reference value available only because the simulation exposes the hidden truth. |
+| Traditional/naive observed-list evaluation | Visible union of `list1_df` and `list2_df` plus `model_df` | Counts only terms observed at least once; recall and precision-related numerators can be biased when capture is incomplete. This is the `naive_*` output. |
+| Two-list CRC evaluation | `list1_df`, `list2_df`, and `model_df` | Uses estimated `q1`, `q2`, and `q12` to weight visible terms and account for terms missed by both lists. This is the `corrected_*` output. |
+
+For a simulated benchmark, report the direct full-ground-truth value, the naive value, and the CRC value together. Repeat the Bernoulli sampling over multiple seeds or bootstrap draws and summarize bias, standard deviation, and coverage. The CRC method is successful when its distribution is closer to the direct full-ground-truth value than the naive baseline across the target metrics.
+
+The repository already contains this pattern in `synthetic_bootstrap.py`: `simulate_two_lists()` samples each term using `sampling_probabilities(type)`, `make_evaluation_table()` combines the generated lists with the synthetic model predictions, and `run_bootstrap()` compares CRC-corrected and naive estimates with hidden-truth metrics.
 
 ## Metric Definitions
 
