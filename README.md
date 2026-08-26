@@ -56,54 +56,7 @@ The q-function uses a local PubMedBERT checkpoint through Hugging Face with `loc
 
 If the checkpoint is missing, download PubMedBERT locally or set `PUBMEDBERT_PATH` / `TrainConfig.model_path` to a valid local model directory.
 
-## Quick Start
 
-Run commands from the project directory:
-
-```bash
-cd /Users/kylewang/Desktop/CRCmodel_evaluation_20260813/CRCModel_evaluation_github
-```
-
-Generate the recommended synthetic CRC plots:
-
-```bash
-python3 synthetic_bootstrap.py
-```
-
-This script reads the bundled workbook (`mimic_iii_synthetic_term_extraction_50_long_full_context-2.xlsx`) and simulates:
-
-| Simulated Object  | Output                                                          |
-| ----------------- | --------------------------------------------------------------- |
-| `list1_df`        | `simulation_outputs/real_entry/data/test_list1.csv`             |
-| `list2_df`        | `simulation_outputs/real_entry/data/test_list2.csv`             |
-| `model_df`        | `simulation_outputs/real_entry/data/test_model_predictions.csv` |
-| hidden full truth | `simulation_outputs/real_entry/data/test_full_truth.csv`        |
-
-It then performs evaluation and bootstrap analysis using matcher-generated labels. Outputs include:
-
-```text
-simulation_outputs/real_entry/CRC_metrics_summary.json
-simulation_outputs/real_entry/point_evaluation/evaluation_summary.json
-simulation_outputs/real_entry/plots/CRC_precision.png
-simulation_outputs/real_entry/plots/CRC_recall.png
-simulation_outputs/real_entry/plots/CRC_type_accuracy.png
-```
-
-Plot descriptions:
-
-| Plot                    | Description                                                                                                           |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `CRC_precision.png`     | Bootstrap distribution of naive precision and CRC-corrected precision, with hidden full-list truth indicated.         |
-| `CRC_recall.png`        | Bootstrap distribution of naive recall and CRC-corrected recall, with hidden full-list truth indicated.               |
-| `CRC_type_accuracy.png` | Bootstrap distribution of naive type accuracy and CRC-corrected type accuracy, with hidden full-list truth indicated. |
-
-Most recent results using the bundled dataset:
-
-| Metric        | Ground Truth | CRC Bootstrap Mean | Naive Bootstrap Mean |
-| ------------- | ------------ | ------------------ | -------------------- |
-| Precision     | 0.8094       | 0.7899             | 0.7112               |
-| Recall        | 0.5502       | 0.5497             | 0.5554               |
-| Type Accuracy | 0.8571       | 0.8559             | 0.8596               |
 
 
 
@@ -187,7 +140,7 @@ The CRC method is successful when its estimates are systematically closer to the
 
 The repository already implements this pattern in `synthetic_bootstrap.py`: `simulate_two_lists()` samples terms using `sampling_probabilities(type)`, `make_evaluation_table()` combines the simulated lists with synthetic model predictions, and `run_bootstrap()` compares CRC-corrected and naive estimates against the hidden-truth metrics.
 
-## Example: Two Annotations Without Complete Ground Truth
+## Start Example
 
 Suppose we have two annotations,
 
