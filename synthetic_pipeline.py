@@ -179,11 +179,19 @@ def bootstrap_once(test_df: pd.DataFrame, q: np.ndarray, pred_total: float, seed
     }
 
 
-def plot_hist_two(dist_a: np.ndarray, dist_b: np.ndarray, vline: float, title: str, xlabel: str, outpath: Path) -> None:
+def plot_hist_two(
+    dist_a: np.ndarray,
+    dist_b: np.ndarray,
+    vline: float,
+    title: str,
+    xlabel: str,
+    outpath: Path,
+    truth_label: str = "Full-list truth",
+) -> None:
     plt.figure()
     plt.hist(dist_a, bins=20, alpha=0.6, label="CRC correction")
     plt.hist(dist_b, bins=20, alpha=0.6, label="Naive (biased)")
-    plt.axvline(vline, linestyle="--", linewidth=2, label="Full-list truth")
+    plt.axvline(vline, linestyle="--", linewidth=2, label=truth_label)
     plt.title(title)
     plt.xlabel(xlabel)
     plt.ylabel("Frequency")

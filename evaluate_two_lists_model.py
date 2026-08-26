@@ -157,11 +157,14 @@ def build_state_table_from_two_lists(
                 out[col] = out[col].map(canonical_type)
             else:
                 out[col] = out[col].map(normalize_text)
-        return out[list(key_cols)].drop_duplicates(subset=list(key_cols), keep="first").reset_index(drop=True)
+        return out[list(key_cols)].reset_index(drop=True)
 
     left = canonicalize(list1_df)
     right = canonicalize(list2_df)
-    merged = left.merge(right, on=list(key_cols), how="outer", indicator=True)
+    occurrence_col = "_within_list_occurrence"
+    left[occurrence_col] = left.groupby(list(key_cols), dropna=False).cumcount()
+    right[occurrence_col] = right.groupby(list(key_cols), dropna=False).cumcount()
+    merged = left.merge(right, on=list(key_cols) + [occurrence_col], how="outer", indicator=True)
     merged["state"] = merged["_merge"].map({"left_only": "10", "right_only": "01", "both": "11"}).astype(str)
     return merged[list(key_cols) + ["state"]].sort_values(["doc_id", "phrase", "type"]).reset_index(drop=True)
 

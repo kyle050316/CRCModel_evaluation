@@ -37,6 +37,7 @@ The evaluation pipeline is:
 | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `evaluate_two_lists_model.py`                                   | Functions for evaluating real user-provided annotation lists and model predictions.                                                                             |
 | `synthetic_bootstrap.py`                                        | Synthetic validation: simulates `list1_df`, `list2_df`, and `model_df`, evaluates them through the real matcher-based pipeline, and generates CRC metric plots. |
+| `two_annotations_pseudo_truth.py`                               | Uses the union of two annotations as ground truth, thins each annotation with `p1(z)` / `p2(z)`, and compares naive and CRC estimates.                            |
 | `type_match_accuracy.py`                                        | Evaluates type extraction accuracy when the model has already extracted the correct phrase.                                                                     |
 | `model_term_matching.py`                                        | Character-based or AI-assisted term matching utilities.                                                                                                         |
 | `simulation_bootstrap_validation.py`                            | Draw plot based on bootstrap simulation `run_list_state_simulation.py`.                                                                                         |
@@ -104,21 +105,7 @@ Most recent results using the bundled dataset:
 | Recall        | 0.5502       | 0.5497             | 0.5554               |
 | Type Accuracy | 0.8571       | 0.8559             | 0.8596               |
 
-## How Synthetic Data Are Constructed
 
-The workbook contains extracted terms and source notes. It does not contain model predictions or a `matched` column.
-
-`synthetic_bootstrap.py` creates hidden synthetic truth and explicit model predictions:
-
-1. For each full ground-truth term, simulate whether the model correctly extracts the phrase: `phrase_match_truth`.
-2. Conditional on phrase extraction, simulate whether the semantic type is correct: `type_match_truth`.
-3. Define `matched_truth = phrase_match_truth * type_match_truth`.
-4. Create one row in `model_df` for each phrase-matched term. If the type is incorrect, the prediction retains the phrase but uses an incorrect semantic type.
-5. Add false-positive predictions to provide a realistic precision denominator.
-6. Split terms into training and test sets by document.
-7. Simulate captures for `list1_df` and `list2_df` from the complete set of terms.
-
-Ground-truth metrics use hidden columns in `test_full_truth.csv`. Naive and CRC metrics do not directly access these hidden columns; instead, they are computed from matcher outputs between visible `list1_df` / `list2_df` terms and `model_df`.
 
 
 ## Simulating the Algorithm with ground truth annotation
@@ -182,6 +169,8 @@ The estimator does not use the hidden full ground truth. It reconstructs the vis
 
 The original `truth_df` is retained only for simulation validation, such as comparing the estimated metrics with metrics computed directly from the complete ground truth.
 
+
+
 ### Comparison with Traditional Evaluation
 
 The simulated data can be evaluated in three ways:
@@ -198,13 +187,129 @@ The CRC method is successful when its estimates are systematically closer to the
 
 The repository already implements this pattern in `synthetic_bootstrap.py`: `simulate_two_lists()` samples terms using `sampling_probabilities(type)`, `make_evaluation_table()` combines the simulated lists with synthetic model predictions, and `run_bootstrap()` compares CRC-corrected and naive estimates against the hidden-truth metrics.
 
+## Example: Two Annotations Without Complete Ground Truth
+
+This example has five steps.
+
+### 1. Input Two Annotations
+
+Both inputs contain one row per mention:
+
+```text
+doc_id, phrase, type, context
+```
+
+In Python they are `annotation1_df` and `annotation2_df`.
+
+### 2. Merge Them into Ground Truth
+
+```python
+from two_annotations_pseudo_truth import prepare_annotations_and_ground_truth
+
+_, _, ground_truth = prepare_annotations_and_ground_truth(
+    annotation1_df,
+    annotation2_df,
+)
+```
+
+The function uses `build_state_table_from_two_lists()` to normalize the four fields and perform a multiset union. It keeps duplicates inside each annotation and removes only overlap between annotations. If the same normalized row occurs `m` times in annotation 1 and `n` times in annotation 2, ground truth keeps `max(m, n)` rows. Different contexts remain different mentions.
+
+### 3. Split Ground Truth into Two Sublists
+
+For each term `z=(doc_id, phrase, type, context)`:
+
+```text
+pj(z) = clip(1 - base_deletion_j + type_adjustment[type(z)], 0.05, 0.95)
+```
+
+Defaults are list 1 deletion `18%` and list 2 deletion `23%`. Type adjustments are defined at the top of `two_annotations_pseudo_truth.py`.
+
+```python
+from two_annotations_pseudo_truth import thin_annotation_lists
+
+sublist1, sublist2 = thin_annotation_lists(
+    ground_truth,
+    ground_truth,
+    seed=20260523,
+    list1_deletion_proportion=0.18,
+    list2_deletion_proportion=0.23,
+)
+```
+
+Every ground-truth term can enter either sublist. The two Bernoulli draws are independent conditional on `z`.
+
+### 4. Run the Algorithm
+
+```python
+from evaluate_two_lists_model import evaluate_two_lists_with_model
+
+summary = evaluate_two_lists_with_model(
+    list1_df=sublist1,
+    list2_df=sublist2,
+    model_df=model_df,
+    output_dir="evaluation_outputs/two_annotations",
+    method="character",
+    require_type_match=True,
+    pred_total=len(model_df),
+)
+```
+
+Run the complete example with 500 bootstrap repetitions:
+
+```bash
+python3 two_annotations_pseudo_truth.py --bootstrap 500
+```
+
+Main outputs are:
+
+| Output | Meaning |
+| --- | --- |
+| `data/test_ground_truth.csv` | Merged ground truth. |
+| `data/test_list1.csv`, `test_list2.csv` | Simulated sublists used by CRC. |
+| `CRC_metrics_summary.json` | Counts and metric summaries. |
+| `plots/CRC_*.png` | Bootstrap plots. |
+
+### 5. Explain the Results
+
+The default run uses 18%/23% base deletion and 500 bootstrap repetitions.
+
+| Count | Value |
+| --- | ---: |
+| Input annotation 1 | 472 |
+| Input annotation 2 | 414 |
+| Merged ground truth | 597 |
+| Simulated sublist 1 | 509 |
+| Simulated sublist 2 | 492 |
+| Visible sublist union | 576 |
+
+The actual deletion rates were `14.74%` and `17.59%` after type adjustment.
+
+| Metric | Ground truth | CRC mean (SD) | Naive mean (SD) |
+| --- | ---: | ---: | ---: |
+| Precision | 0.7152 | 0.7122 (0.0073) | 0.6981 (0.0058) |
+| Recall | 0.5595 | 0.5590 (0.0039) | 0.5605 (0.0033) |
+| Type accuracy | 0.8542 | 0.8536 (0.0037) | 0.8545 (0.0031) |
+
+![Precision bootstrap](simulation_outputs/two_annotations_pseudo_truth_p_z/plots/CRC_precision.png)
+
+CRC precision is `0.0030` below ground truth; naive precision is `0.0171` below it. CRC corrects most of the loss caused by terms missing from both sublists.
+
+![Recall bootstrap](simulation_outputs/two_annotations_pseudo_truth_p_z/plots/CRC_recall.png)
+
+Both recall estimates are close. CRC differs from ground truth by `-0.0005`; naive differs by `+0.0010`.
+
+![Type-accuracy bootstrap](simulation_outputs/two_annotations_pseudo_truth_p_z/plots/CRC_type_accuracy.png)
+
+Both type-accuracy estimates are close. Naive is slightly closer here. CRC has slightly larger variance because it uses inverse-probability weights.
+
+Ground truth is used only for validation. The algorithm receives `sublist1`, `sublist2`, and `model_df`.
 
 
 
 
 
 
-## Metric Definitions
+## Evaluation Metrics
 
 For the hidden full truth:
 
