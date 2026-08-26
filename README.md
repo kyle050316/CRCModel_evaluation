@@ -189,7 +189,7 @@ The repository already implements this pattern in `synthetic_bootstrap.py`: `sim
 
 ## Example: Two Annotations Without Complete Ground Truth
 
-This example has five steps.
+Suppose we have two annotations,
 
 ### 1. Input Two Annotations
 

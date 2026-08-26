@@ -10,12 +10,15 @@ only to validate the simulation.
 import argparse
 import json
 from pathlib import Path
+from statistics import NormalDist
 from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
 
 from evaluate_two_lists_model import (
+    EPS,
+    MAX_ABS_WEIGHT,
     QFunction,
     TrainConfig,
     build_state_table_from_two_lists,
@@ -40,11 +43,37 @@ from synthetic_pipeline import (
     load_synthetic_full_terms,
     plot_hist_two,
 )
+import matplotlib.pyplot as plt
 
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_OUT_DIR = ROOT / "simulation_outputs" / "two_annotations_pseudo_truth_p_z"
 DEFAULT_BOOTSTRAP_RESAMPLES = 1000
+
+# Nominal confidence levels shown in the Monte Carlo coverage plot.
+COVERAGE_LEVELS = (0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.99)
+
+# Omit very small semantic-type groups from the capture-coverage plot because
+# their Monte Carlo intervals are dominated by group size.
+MIN_TYPE_COUNT_FOR_COVERAGE_PLOT = 10
+
+ESTIMATOR_SUFFIXES = {
+    "corrected": "corrected",
+    "q_ratio_only": "q_ratio_only",
+    "oracle_union_ht": "oracle_union_ht",
+    "naive": "naive",
+}
+ESTIMATOR_LABELS = {
+    "corrected": "Full CRC",
+    "q_ratio_only": "q-ratio only",
+    "oracle_union_ht": "Oracle union-HT",
+    "naive": "Naive",
+}
+METRIC_TRUTH_KEYS = {
+    "precision": "precision_true",
+    "recall": "recall_true",
+    "type_accuracy": "type_accuracy_true",
+}
 
 # ---------------------------------------------------------------------------
 # Tunable simulation settings
@@ -60,24 +89,24 @@ LIST2_BASE_DELETION_PROPORTION = 0.35
 # to remain in a simulated list; negative values make it more likely to be
 # deleted. Add or edit exact lowercase type names here.
 TYPE_PROBABILITY_ADJUSTMENT = {
-    "diagnosis": -0.25,
-    "medication": -0.25,
-    "procedure": -0.25,
-    "symptom": -0.10,
-    "finding": -0.10,
-    "imaging_finding": -0.10,
-    "imaging": -0.10,
-    "lab": -0.10,
-    "comorbidity": 0.15,
-    "treatment": 0.15,
-    "sign": 0.15,
-    "risk_factor": 0.15,
-    "test": 0.15,
-    "vital_sign": 0.15,
-    "anatomy": 0.15,
-    "specialty": 0.15,
-    "organism": 0.15,
-    "score": 0.15,
+    "medication": 0.10,
+    "lab": 0.10,
+    "vital_sign": 0.10,
+    "diagnosis": 0.05,
+    "procedure": 0.05,
+    "symptom": 0.05,
+    "sign": 0.05,
+    "test": 0.05,
+    "comorbidity": 0.00,
+    "treatment": 0.00,
+    "imaging": 0.00,
+    "finding": -0.05,
+    "imaging_finding": -0.05,
+    "risk_factor": -0.10,
+    "anatomy": -0.10,
+    "organism": -0.10,
+    "specialty": -0.15,
+    "score": -0.15,
 }
 
 # Final p1(z)/p2(z) values are clipped to this interval to avoid zero capture
@@ -221,7 +250,9 @@ def evaluate_one_thinning(
     model_df: pd.DataFrame,
     q_by_key: pd.DataFrame,
     pred_total: float,
-) -> Tuple[Dict[str, float], Dict[str, float]]:
+    list1_deletion_proportion: float,
+    list2_deletion_proportion: float,
+) -> Tuple[Dict[str, float], Dict[str, float], Dict[str, Dict[str, float]]]:
     phrase_eval, phrase_matches = make_evaluation_table(
         list1_df,
         list2_df,
@@ -233,7 +264,45 @@ def evaluate_one_thinning(
     precision_eval["matched"] = precision_eval["both_phrase_type_match"]
     precision_recall = compute_estimate_from_eval_df(precision_eval, q_by_key, pred_total)
     type_accuracy = compute_type_accuracy_from_eval_df(phrase_eval, phrase_matches, q_by_key)
-    return precision_recall, type_accuracy
+
+    work = canonicalize_terms(add_match_columns(phrase_eval, phrase_matches))
+    work = work.merge(q_by_key, on=KEY_COLUMNS, how="left", validate="many_to_one")
+    if work[["q1", "q2", "q12"]].isna().any().any():
+        missing = int(work[["q1", "q2", "q12"]].isna().any(axis=1).sum())
+        raise ValueError(f"Missing q predictions for {missing} visible rows")
+
+    q1 = work["q1"].astype(float).to_numpy()
+    q2 = work["q2"].astype(float).to_numpy()
+    q12 = work["q12"].astype(float).to_numpy()
+    pi_hat = np.clip(q12 / np.maximum(EPS, q1 * q2), EPS, MAX_ABS_WEIGHT)
+    q_ratio_weights = np.clip(1.0 / pi_hat, 0.0, MAX_ABS_WEIGHT)
+
+    p1 = work.apply(p1_of_z, axis=1, base_deletion_proportion=list1_deletion_proportion).to_numpy()
+    p2 = work.apply(p2_of_z, axis=1, base_deletion_proportion=list2_deletion_proportion).to_numpy()
+    oracle_union_probability = np.clip(p1 + p2 - (p1 * p2), EPS, 1.0)
+    oracle_weights = 1.0 / oracle_union_probability
+
+    both = work["both_phrase_type_match"].astype(float).to_numpy()
+    phrase = work["phrase_match"].astype(float).to_numpy()
+
+    def weighted_metrics(weights: np.ndarray) -> Dict[str, float]:
+        weighted_tp = float(np.dot(weights, both))
+        weighted_terms = float(weights.sum())
+        weighted_phrase = float(np.dot(weights, phrase))
+        return {
+            "precision": weighted_tp / pred_total if pred_total > 0 else 0.0,
+            "recall": weighted_tp / weighted_terms if weighted_terms > 0 else 0.0,
+            "type_accuracy": weighted_tp / weighted_phrase if weighted_phrase > 0 else 0.0,
+            "weighted_tp_total": weighted_tp,
+            "weighted_terms_total": weighted_terms,
+            "weighted_phrase_match_total": weighted_phrase,
+        }
+
+    alternatives = {
+        "q_ratio_only": weighted_metrics(q_ratio_weights),
+        "oracle_union_ht": weighted_metrics(oracle_weights),
+    }
+    return precision_recall, type_accuracy, alternatives
 
 
 def run_bootstrap(
@@ -248,9 +317,15 @@ def run_bootstrap(
     outputs = {
         "precision_corrected": np.zeros(n_resamples),
         "recall_corrected": np.zeros(n_resamples),
+        "precision_q_ratio_only": np.zeros(n_resamples),
+        "recall_q_ratio_only": np.zeros(n_resamples),
+        "precision_oracle_union_ht": np.zeros(n_resamples),
+        "recall_oracle_union_ht": np.zeros(n_resamples),
         "precision_naive": np.zeros(n_resamples),
         "recall_naive": np.zeros(n_resamples),
         "type_accuracy_corrected": np.zeros(n_resamples),
+        "type_accuracy_q_ratio_only": np.zeros(n_resamples),
+        "type_accuracy_oracle_union_ht": np.zeros(n_resamples),
         "type_accuracy_naive": np.zeros(n_resamples),
     }
     for b in range(n_resamples):
@@ -261,36 +336,255 @@ def run_bootstrap(
             list1_deletion_proportion=list1_deletion_proportion,
             list2_deletion_proportion=list2_deletion_proportion,
         )
-        estimate, type_accuracy = evaluate_one_thinning(list1, list2, model_df, q_by_key, pred_total)
+        estimate, type_accuracy, alternatives = evaluate_one_thinning(
+            list1,
+            list2,
+            model_df,
+            q_by_key,
+            pred_total,
+            list1_deletion_proportion,
+            list2_deletion_proportion,
+        )
         outputs["precision_corrected"][b] = estimate["corrected_precision"]
         outputs["recall_corrected"][b] = estimate["corrected_recall"]
+        outputs["precision_q_ratio_only"][b] = alternatives["q_ratio_only"]["precision"]
+        outputs["recall_q_ratio_only"][b] = alternatives["q_ratio_only"]["recall"]
+        outputs["precision_oracle_union_ht"][b] = alternatives["oracle_union_ht"]["precision"]
+        outputs["recall_oracle_union_ht"][b] = alternatives["oracle_union_ht"]["recall"]
         outputs["precision_naive"][b] = estimate["naive_precision"]
         outputs["recall_naive"][b] = estimate["naive_recall"]
         outputs["type_accuracy_corrected"][b] = type_accuracy["corrected_type_accuracy"]
+        outputs["type_accuracy_q_ratio_only"][b] = alternatives["q_ratio_only"]["type_accuracy"]
+        outputs["type_accuracy_oracle_union_ht"][b] = alternatives["oracle_union_ht"]["type_accuracy"]
         outputs["type_accuracy_naive"][b] = type_accuracy["naive_type_accuracy"]
     return outputs
 
 
 def distribution_summary(boot: Dict[str, np.ndarray], n_resamples: int) -> Dict[str, object]:
-    return {
-        "n_resamples": n_resamples,
-        "corrected": {
-            "precision_mean": float(boot["precision_corrected"].mean()),
-            "precision_std": float(boot["precision_corrected"].std(ddof=1)),
-            "recall_mean": float(boot["recall_corrected"].mean()),
-            "recall_std": float(boot["recall_corrected"].std(ddof=1)),
-            "type_accuracy_mean": float(boot["type_accuracy_corrected"].mean()),
-            "type_accuracy_std": float(boot["type_accuracy_corrected"].std(ddof=1)),
-        },
-        "naive": {
-            "precision_mean": float(boot["precision_naive"].mean()),
-            "precision_std": float(boot["precision_naive"].std(ddof=1)),
-            "recall_mean": float(boot["recall_naive"].mean()),
-            "recall_std": float(boot["recall_naive"].std(ddof=1)),
-            "type_accuracy_mean": float(boot["type_accuracy_naive"].mean()),
-            "type_accuracy_std": float(boot["type_accuracy_naive"].std(ddof=1)),
-        },
+    summary: Dict[str, object] = {"n_resamples": n_resamples}
+    for method, suffix in ESTIMATOR_SUFFIXES.items():
+        method_summary: Dict[str, float] = {}
+        for metric in METRIC_TRUTH_KEYS:
+            values = boot[f"{metric}_{suffix}"]
+            method_summary[f"{metric}_mean"] = float(values.mean())
+            method_summary[f"{metric}_std"] = float(values.std(ddof=1))
+        summary[method] = method_summary
+    return summary
+
+
+def estimator_diagnostics(boot: Dict[str, np.ndarray], truth: Dict[str, float]) -> Dict[str, object]:
+    diagnostics: Dict[str, object] = {
+        "coverage_definition": (
+            "For each Monte Carlo estimate, form estimate +/- z * method bootstrap SD; "
+            "coverage is the fraction containing merged-ground-truth truth."
+        ),
+        "methods": {},
     }
+    methods = diagnostics["methods"]
+    assert isinstance(methods, dict)
+    for method, suffix in ESTIMATOR_SUFFIXES.items():
+        method_diagnostics: Dict[str, object] = {}
+        for metric, truth_key in METRIC_TRUTH_KEYS.items():
+            values = boot[f"{metric}_{suffix}"]
+            target = float(truth[truth_key])
+            errors = values - target
+            standard_deviation = float(values.std(ddof=1))
+            low, high = np.quantile(values, [0.025, 0.975])
+            coverage = {}
+            for level in COVERAGE_LEVELS:
+                z_value = NormalDist().inv_cdf((1.0 + level) / 2.0)
+                coverage[f"{level:.2f}"] = float(
+                    np.mean(np.abs(errors) <= z_value * standard_deviation)
+                )
+            method_diagnostics[metric] = {
+                "truth": target,
+                "mean": float(values.mean()),
+                "bias": float(errors.mean()),
+                "standard_deviation": standard_deviation,
+                "rmse": float(np.sqrt(np.mean(np.square(errors)))),
+                "bootstrap_percentile_interval_95": [float(low), float(high)],
+                "truth_in_bootstrap_percentile_interval_95": bool(low <= target <= high),
+                "normal_interval_coverage": coverage,
+            }
+        methods[method] = method_diagnostics
+    return diagnostics
+
+
+def bootstrap_type_capture_coverage(
+    ground_truth: pd.DataFrame,
+    list1_deletion_proportion: float,
+    list2_deletion_proportion: float,
+    n_resamples: int,
+) -> Dict[str, object]:
+    type_names = ground_truth["type"].fillna("").astype(str).str.strip().str.lower()
+    type_counts = type_names.value_counts()
+    plotted_types = sorted(
+        str(type_name)
+        for type_name, count in type_counts.items()
+        if type_name and int(count) >= MIN_TYPE_COUNT_FOR_COVERAGE_PLOT
+    )
+    p1 = ground_truth.apply(
+        p1_of_z,
+        axis=1,
+        base_deletion_proportion=list1_deletion_proportion,
+    ).to_numpy()
+    p2 = ground_truth.apply(
+        p2_of_z,
+        axis=1,
+        base_deletion_proportion=list2_deletion_proportion,
+    ).to_numpy()
+    values = {
+        "list1": np.zeros((n_resamples, len(plotted_types))),
+        "list2": np.zeros((n_resamples, len(plotted_types))),
+        "union": np.zeros((n_resamples, len(plotted_types))),
+    }
+    masks = [(type_names == type_name).to_numpy() for type_name in plotted_types]
+    for b in range(n_resamples):
+        rng = np.random.default_rng(BOOTSTRAP_BASE_SEED + b)
+        keep1 = rng.random(len(ground_truth)) < p1
+        keep2 = rng.random(len(ground_truth)) < p2
+        for j, mask in enumerate(masks):
+            values["list1"][b, j] = float(keep1[mask].mean())
+            values["list2"][b, j] = float(keep2[mask].mean())
+            values["union"][b, j] = float(np.logical_or(keep1, keep2)[mask].mean())
+    expected = {
+        "list1": np.array([float(p1[mask].mean()) for mask in masks]),
+        "list2": np.array([float(p2[mask].mean()) for mask in masks]),
+        "union": np.array([float((p1[mask] + p2[mask] - p1[mask] * p2[mask]).mean()) for mask in masks]),
+    }
+    return {
+        "types": plotted_types,
+        "counts": {type_name: int(type_counts[type_name]) for type_name in plotted_types},
+        "values": values,
+        "expected": expected,
+    }
+
+
+def type_capture_coverage_summary(coverage: Dict[str, object]) -> Dict[str, object]:
+    type_names = coverage["types"]
+    counts = coverage["counts"]
+    values = coverage["values"]
+    expected = coverage["expected"]
+    assert isinstance(type_names, list)
+    assert isinstance(counts, dict)
+    assert isinstance(values, dict)
+    assert isinstance(expected, dict)
+    summary: Dict[str, object] = {}
+    for j, type_name in enumerate(type_names):
+        row: Dict[str, object] = {"n_terms": counts[type_name]}
+        for source in ["list1", "list2", "union"]:
+            source_values = values[source][:, j]
+            low, high = np.quantile(source_values, [0.025, 0.975])
+            row[source] = {
+                "expected": float(expected[source][j]),
+                "mean": float(source_values.mean()),
+                "interval_95": [float(low), float(high)],
+            }
+        summary[type_name] = row
+    return summary
+
+
+def plot_estimator_comparison(
+    boot: Dict[str, np.ndarray],
+    truth: Dict[str, float],
+    outpath: Path,
+) -> None:
+    methods = list(ESTIMATOR_SUFFIXES)
+    y_positions = np.arange(len(methods))
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.8))
+    for ax, (metric, truth_key) in zip(axes, METRIC_TRUTH_KEYS.items()):
+        distributions = [boot[f"{metric}_{ESTIMATOR_SUFFIXES[method]}"] for method in methods]
+        means = np.array([values.mean() for values in distributions])
+        intervals = np.array([np.quantile(values, [0.025, 0.975]) for values in distributions])
+        errors = np.vstack([means - intervals[:, 0], intervals[:, 1] - means])
+        ax.errorbar(means, y_positions, xerr=errors, fmt="o", capsize=4)
+        ax.axvline(float(truth[truth_key]), color="black", linestyle="--", label="Merged truth")
+        ax.set_title(metric.replace("_", " ").title())
+        ax.set_yticks(y_positions, [ESTIMATOR_LABELS[method] for method in methods])
+        ax.grid(axis="x", alpha=0.25)
+    axes[0].legend(loc="best")
+    fig.suptitle("Estimator mean and 95% Monte Carlo interval")
+    fig.tight_layout()
+    fig.savefig(outpath, dpi=220)
+    plt.close(fig)
+
+
+def plot_interval_coverage(
+    boot: Dict[str, np.ndarray],
+    truth: Dict[str, float],
+    outpath: Path,
+) -> None:
+    levels = np.asarray(COVERAGE_LEVELS)
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.5), sharex=True, sharey=True)
+    for ax, (metric, truth_key) in zip(axes, METRIC_TRUTH_KEYS.items()):
+        target = float(truth[truth_key])
+        for method, suffix in ESTIMATOR_SUFFIXES.items():
+            values = boot[f"{metric}_{suffix}"]
+            standard_deviation = float(values.std(ddof=1))
+            observed = []
+            for level in levels:
+                z_value = NormalDist().inv_cdf((1.0 + float(level)) / 2.0)
+                observed.append(float(np.mean(np.abs(values - target) <= z_value * standard_deviation)))
+            ax.plot(levels, observed, marker="o", label=ESTIMATOR_LABELS[method])
+        ax.plot([0.5, 1.0], [0.5, 1.0], color="black", linestyle="--", label="Ideal")
+        ax.set_title(metric.replace("_", " ").title())
+        ax.set_xlabel("Nominal coverage")
+        ax.set_xlim(0.48, 1.0)
+        ax.set_ylim(0.0, 1.02)
+        ax.grid(alpha=0.25)
+    axes[0].set_ylabel("Observed coverage")
+    handles, labels = axes[-1].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=5, bbox_to_anchor=(0.5, -0.02))
+    fig.suptitle("Monte Carlo normal-interval coverage diagnostic")
+    fig.tight_layout(rect=[0, 0.10, 1, 0.95])
+    fig.savefig(outpath, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_type_capture_coverage(coverage: Dict[str, object], outpath: Path) -> None:
+    type_names = coverage["types"]
+    values = coverage["values"]
+    expected = coverage["expected"]
+    assert isinstance(type_names, list)
+    assert isinstance(values, dict)
+    assert isinstance(expected, dict)
+    order = np.argsort(expected["union"])
+    labels = [type_names[int(i)] for i in order]
+    y = np.arange(len(labels), dtype=float)
+    offsets = {"list1": -0.22, "list2": 0.0, "union": 0.22}
+    colors = {"list1": "tab:blue", "list2": "tab:orange", "union": "tab:green"}
+    fig, ax = plt.subplots(figsize=(9, max(5.5, 0.48 * len(labels))))
+    for source in ["list1", "list2", "union"]:
+        source_values = values[source][:, order]
+        means = source_values.mean(axis=0)
+        intervals = np.quantile(source_values, [0.025, 0.975], axis=0)
+        errors = np.vstack([means - intervals[0], intervals[1] - means])
+        ax.errorbar(
+            means,
+            y + offsets[source],
+            xerr=errors,
+            fmt="o",
+            capsize=3,
+            color=colors[source],
+            label=f"{source} mean + 95% interval",
+        )
+        ax.scatter(
+            expected[source][order],
+            y + offsets[source],
+            marker="x",
+            color="black",
+            s=28,
+            zorder=3,
+        )
+    ax.set_yticks(y, labels)
+    ax.set_xlim(0.0, 1.02)
+    ax.set_xlabel("Capture coverage")
+    ax.set_title("Capture coverage by semantic type (x = expected from p(z))")
+    ax.grid(axis="x", alpha=0.25)
+    ax.legend(loc="upper left")
+    fig.tight_layout()
+    fig.savefig(outpath, dpi=220)
+    plt.close(fig)
 
 
 def run(
@@ -382,12 +676,14 @@ def run(
     q_by_key = q_input.copy()
     q_by_key[["q1", "q2", "q12"]] = q_pred
     q_by_key = q_by_key.drop_duplicates(KEY_COLUMNS, keep="first")
-    _, point_type_accuracy = evaluate_one_thinning(
+    _, point_type_accuracy, point_alternative_estimators = evaluate_one_thinning(
         test_list1,
         test_list2,
         test_model_df,
         q_by_key,
         float(len(test_model_df)),
+        list1_deletion_proportion,
+        list2_deletion_proportion,
     )
 
     boot = run_bootstrap(
@@ -402,9 +698,21 @@ def run(
     precision_plot = plot_dir / "CRC_precision.png"
     recall_plot = plot_dir / "CRC_recall.png"
     type_accuracy_plot = plot_dir / "CRC_type_accuracy.png"
+    estimator_comparison_plot = plot_dir / "estimator_comparison.png"
+    interval_coverage_plot = plot_dir / "interval_coverage.png"
+    type_capture_coverage_plot = plot_dir / "type_capture_coverage.png"
     plot_hist_two(boot["precision_corrected"], boot["precision_naive"], truth["precision_true"], "CRC precision (merged ground truth)", "Precision", precision_plot, "Merged ground truth")
     plot_hist_two(boot["recall_corrected"], boot["recall_naive"], truth["recall_true"], "CRC recall (merged ground truth)", "Recall", recall_plot, "Merged ground truth")
     plot_hist_two(boot["type_accuracy_corrected"], boot["type_accuracy_naive"], truth["type_accuracy_true"], "CRC type accuracy (merged ground truth)", "Type accuracy", type_accuracy_plot, "Merged ground truth")
+    plot_estimator_comparison(boot, truth, estimator_comparison_plot)
+    plot_interval_coverage(boot, truth, interval_coverage_plot)
+    type_coverage = bootstrap_type_capture_coverage(
+        test_ground_truth,
+        list1_deletion_proportion,
+        list2_deletion_proportion,
+        n_resamples,
+    )
+    plot_type_capture_coverage(type_coverage, type_capture_coverage_plot)
 
     hidden_tp = float(test_full["matched_truth"].sum())
     hidden_phrase = float(test_full["phrase_match_truth"].sum())
@@ -460,7 +768,10 @@ def run(
         "hidden_full_truth_reference": hidden_full_truth_reference,
         "point_estimate_from_evaluate_two_lists_with_model": point_summary["estimate"],
         "point_type_accuracy_from_matcher": point_type_accuracy,
+        "point_alternative_estimators": point_alternative_estimators,
         "bootstrap": distribution_summary(boot, n_resamples),
+        "estimator_diagnostics": estimator_diagnostics(boot, truth),
+        "type_capture_coverage": type_capture_coverage_summary(type_coverage),
         "paths": {
             "test_original_list1": relpath(data_dir / "test_original_list1.csv"),
             "test_original_list2": relpath(data_dir / "test_original_list2.csv"),
@@ -473,6 +784,9 @@ def run(
             "precision_hist": relpath(precision_plot),
             "recall_hist": relpath(recall_plot),
             "type_accuracy_hist": relpath(type_accuracy_plot),
+            "estimator_comparison_plot": relpath(estimator_comparison_plot),
+            "interval_coverage_plot": relpath(interval_coverage_plot),
+            "type_capture_coverage_plot": relpath(type_capture_coverage_plot),
             "summary": relpath(summary_path),
         },
         "train_summary": train_summary,
