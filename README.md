@@ -7,10 +7,10 @@ The workflow simulates the three inputs used in a real evaluation:
 ```text
 list1_df: terms captured by annotator/list 1
 list2_df: terms captured by annotator/list 2
-model_df: explicit synthetic model predictions
+model_df: predictions from the model being evaluated
 ```
 
-Ground-truth metrics are computed using hidden synthetic truth. Naive and CRC metrics are computed from the two simulated incomplete annotation lists, using `list1_df`, `list2_df`, and the model output under evaluation (`model_df`).
+`model_df` can come from a real extraction model such as GENIE. The example keeps the existing synthetic generator only as a fallback. Naive and CRC metrics use `list1_df`, `list2_df`, and `model_df`; the merged or hidden ground truth is used only to validate the simulation.
 
 ## Workflow
 
@@ -38,6 +38,7 @@ The evaluation pipeline is:
 | `evaluate_two_lists_model.py`                                   | Functions for evaluating real user-provided annotation lists and model predictions.                                                                             |
 | `synthetic_bootstrap.py`                                        | Synthetic validation: simulates `list1_df`, `list2_df`, and `model_df`, evaluates them through the real matcher-based pipeline, and generates CRC metric plots. |
 | `two_annotations_pseudo_truth.py`                               | Uses the union of two annotations as ground truth, thins each annotation with `p1(z)` / `p2(z)`, and compares naive and CRC estimates.                            |
+| `generate_genie_model_df.py`                                   | Runs GENIE on the example notes and converts its JSON output to the `model_df` CSV interface.                                                                    |
 | `type_match_accuracy.py`                                        | Evaluates type extraction accuracy when the model has already extracted the correct phrase.                                                                     |
 | `model_term_matching.py`                                        | Character-based or AI-assisted term matching utilities.                                                                                                         |
 | `simulation_bootstrap_validation.py`                            | Draw plot based on bootstrap simulation `run_list_state_simulation.py`.                                                                                         |
@@ -55,6 +56,12 @@ The q-function uses a local PubMedBERT checkpoint through Hugging Face with `loc
 ```
 
 If the checkpoint is missing, download PubMedBERT locally or set `PUBMEDBERT_PATH` / `TrainConfig.model_path` to a valid local model directory.
+
+GENIE is optional and is not added to the core requirements. To generate a real `model_df`, install `vllm` in a GPU environment that can run the 8B model:
+
+```bash
+pip install vllm
+```
 
 
 
@@ -175,7 +182,7 @@ For each term `z=(doc_id, phrase, type, context)`:
 pj(z) = clip(1 - base_deletion_j + type_adjustment[type(z)], 0.05, 0.95)
 ```
 
-Defaults are list 1 deletion `18%` and list 2 deletion `23%`. Type adjustments are defined at the top of `two_annotations_pseudo_truth.py`.
+Defaults are list 1 deletion `15%` and list 2 deletion `35%`. Type adjustments are defined at the top of `two_annotations_pseudo_truth.py`.
 
 ```python
 from two_annotations_pseudo_truth import thin_annotation_lists
@@ -184,14 +191,44 @@ sublist1, sublist2 = thin_annotation_lists(
     ground_truth,
     ground_truth,
     seed=20260523,
-    list1_deletion_proportion=0.18,
-    list2_deletion_proportion=0.23,
+    list1_deletion_proportion=0.15,
+    list2_deletion_proportion=0.35,
 )
 ```
 
 Every ground-truth term can enter either sublist. The two Bernoulli draws are independent conditional on `z`.
 
-### 4. Run the Algorithm
+### 4. Generate `model_df` and Run the Algorithm
+
+For a formal model evaluation, generate `model_df` with the model being evaluated; use the synthetic fallback only to validate the statistical pipeline. The recommended example uses [GENIE_en_8b](https://huggingface.co/THUMedInfo/GENIE_en_8b). According to its official model card, GENIE accepts EHR text and returns a JSON list containing `phrase`, `semantic_type`, assertion status, and other attributes. The included converter maps:
+
+```text
+GENIE phrase        -> model_df.phrase
+GENIE semantic_type -> model_df.type
+note row_id         -> model_df.doc_id
+```
+
+Run GENIE only on the final 40% of notes used by this example's test split:
+
+```bash
+python3 generate_genie_model_df.py \
+  --test-only \
+  --output genie_model_df.csv
+```
+
+The output contains the required columns `doc_id`, `phrase`, and `type`. `genie_semantic_type` and `assertion_status` are retained as optional descriptive columns. GENIE's semantic types are coarser than this example's labels, so review `GENIE_TYPE_TO_PROJECT_TYPE` near the top of `generate_genie_model_df.py` before interpreting type accuracy. The command-line example uses deterministic character matching; normalized synonyms produced by GENIE may therefore count as phrase mismatches unless the separate AI-assisted matcher is configured.
+
+Pass the generated file through the new entry point:
+
+```bash
+python3 two_annotations_pseudo_truth.py \
+  --model-df genie_model_df.csv \
+  --bootstrap 1000
+```
+
+The script loads `model_df` once, keeps only test-document predictions, and holds those predictions fixed while the two annotation sublists are resampled. It does not call GENIE again during bootstrap.
+
+The underlying function has always accepted an in-memory DataFrame:
 
 ```python
 from evaluate_two_lists_model import evaluate_two_lists_with_model
@@ -207,10 +244,10 @@ summary = evaluate_two_lists_with_model(
 )
 ```
 
-Run the complete example with 500 bootstrap repetitions:
+If `--model-df` is omitted, the existing synthetic prediction generator is used. This is useful for a quick simulation that does not require GENIE:
 
 ```bash
-python3 two_annotations_pseudo_truth.py --bootstrap 500
+python3 two_annotations_pseudo_truth.py --bootstrap 1000
 ```
 
 Main outputs are:
@@ -224,7 +261,7 @@ Main outputs are:
 
 ### 5. Explain the Results
 
-The default run uses 18%/23% base deletion and 500 bootstrap repetitions.
+The stored result below uses the synthetic fallback, 15%/35% base deletion, and 1000 bootstrap repetitions. A GENIE-generated `model_df` will produce different metric values.
 
 | Count | Value |
 | --- | ---: |
@@ -232,24 +269,24 @@ The default run uses 18%/23% base deletion and 500 bootstrap repetitions.
 | Input annotation 2 | 414 |
 | Merged ground truth | 597 |
 | Simulated sublist 1 | 509 |
-| Simulated sublist 2 | 492 |
-| Visible sublist union | 576 |
+| Simulated sublist 2 | 410 |
+| Visible sublist union | 563 |
 
-The actual deletion rates were `14.74%` and `17.59%` after type adjustment.
+The actual deletion rates were `14.74%` and `31.32%` after type adjustment.
 
 | Metric | Ground truth | CRC mean (SD) | Naive mean (SD) |
 | --- | ---: | ---: | ---: |
-| Precision | 0.7152 | 0.7122 (0.0073) | 0.6981 (0.0058) |
-| Recall | 0.5595 | 0.5590 (0.0039) | 0.5605 (0.0033) |
-| Type accuracy | 0.8542 | 0.8536 (0.0037) | 0.8545 (0.0031) |
+| Precision | 0.7152 | 0.7122 (0.0099) | 0.6876 (0.0077) |
+| Recall | 0.5595 | 0.5596 (0.0054) | 0.5602 (0.0043) |
+| Type accuracy | 0.8542 | 0.8542 (0.0047) | 0.8545 (0.0038) |
 
 ![Precision bootstrap](simulation_outputs/two_annotations_pseudo_truth_p_z/plots/CRC_precision.png)
 
-CRC precision is `0.0030` below ground truth; naive precision is `0.0171` below it. CRC corrects most of the loss caused by terms missing from both sublists.
+CRC precision is `0.0030` below ground truth; naive precision is `0.0276` below it. CRC corrects most of the loss caused by terms missing from both sublists.
 
 ![Recall bootstrap](simulation_outputs/two_annotations_pseudo_truth_p_z/plots/CRC_recall.png)
 
-Both recall estimates are close. CRC differs from ground truth by `-0.0005`; naive differs by `+0.0010`.
+Both recall estimates are close. CRC differs from ground truth by `+0.0002`; naive differs by `+0.0008`.
 
 ![Type-accuracy bootstrap](simulation_outputs/two_annotations_pseudo_truth_p_z/plots/CRC_type_accuracy.png)
 

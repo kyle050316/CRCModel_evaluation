@@ -39,7 +39,11 @@ PLOT_DIR = OUT_DIR / "plots"
 
 
 def relpath(path: Path) -> str:
-    return path.resolve().relative_to(ROOT).as_posix()
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(resolved)
 
 
 def load_full_terms_from_xlsx(path: Path) -> pd.DataFrame:

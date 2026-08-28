@@ -4,7 +4,7 @@
 
 这个实验回答两个问题：
 
-1. 完整 CRC 中的 inclusion–exclusion 是否带来过多方差？
+1. 固定 q-function 和测试集时，不同消融估计器的条件波动如何？
 2. 误差来自估计器结构，还是来自 q-function 对捕获概率的估计？
 
 两个 annotation 先合并成 merged ground truth。随后，每个术语
@@ -14,6 +14,8 @@ z_i=(doc\_id_i, phrase_i, type_i, context_i)
 \]
 
 按 `two_annotations_pseudo_truth.py` 顶部定义的 \(p_1(z_i),p_2(z_i)\) 独立进入两个模拟列表。模型预测保持不变，默认重复 1000 次。
+
+这里固定 merged ground truth、模型预测和已经训练好的 q-function，只重复列表删减。因此文中的 SD 是**固定 nuisance 条件下的 Monte Carlo SD**，不是包含“重新生成数据并重新估计 q-function”的完整渐近方差。
 
 ## 2. 四种比较方法
 
@@ -55,9 +57,19 @@ w_i^{CRC}=
 {\hat\pi_i}.
 \]
 
-括号中的 inclusion–exclusion 项对状态 `10`、`01`、`11` 给出不同权重。它利用的信息更多，但也会增加方差。
+括号中的 inclusion–exclusion 项对状态 `10`、`01`、`11` 给出不同校正，它是完整 EIF 估计结构的一部分，不能脱离整个影响函数单独解释为“多余噪声”。
 
-### C. 仅 q-ratio 的稳定化修正
+完整 CRC 是基于 efficient influence function（EIF）构造的估计器。在对应半参数模型、正则性条件、nuisance 一致估计和所需收敛速度成立时：
+
+\[
+\sqrt n(\hat\theta_{CRC}-\theta)
+\overset{d}{\longrightarrow}
+N(0,Var(\phi_{EIF})),
+\]
+
+其中 \(Var(\phi_{EIF})\) 是该模型下正则渐近线性估计器的效率界。因此不能根据本实验的固定-q条件 SD，判断 Full CRC 的渐近效率低于某个删减了 EIF 项的估计器。
+
+### C. 仅 q-ratio 的消融方案
 
 去掉 inclusion–exclusion，只保留对“两个列表都遗漏”的修正：
 
@@ -66,7 +78,7 @@ w_i^{ratio}=\frac{1}{\hat\pi_i}
 =\frac{q_{1i}q_{2i}}{q_{12i}}.
 \]
 
-在给定 \(z\) 后两个列表独立时，\(\hat\pi_i\) 可解释为术语至少出现一次的概率。这个方法预期方差较低，但 q-function 有系统误差或列表条件独立假设不成立时，可能产生偏差。
+在给定 \(z\) 后两个列表独立时，\(\hat\pi_i\) 可解释为术语至少出现一次的概率。这个方案删除了 EIF 中的 inclusion–exclusion 校正项，只用于消融分析；它不再自动继承 Full CRC 的正则渐近无偏和半参数效率性质。即使它在固定-q实验中显示较小 SD，也不能据此认为其理论方差更小。
 
 ### D. Oracle union-HT
 
@@ -112,13 +124,10 @@ SD=\sqrt{Var(\hat\theta)},
 RMSE=\sqrt{Bias^2+Var(\hat\theta)}.
 \]
 
-生成三类新图片：
+生成两类新图片：
 
 - `estimator_comparison.png`：四种方法的均值和 95% Monte Carlo 分位区间。
 - `interval_coverage.png`：用每种方法的 bootstrap SD 构造正态区间，比较 nominal coverage 和 observed coverage。这是固定模拟数据上的 Monte Carlo 校准诊断，不等同于真实研究中的嵌套 bootstrap 置信区间。
-- `type_capture_coverage.png`：按术语类别显示 List 1、List 2 和并集的平均捕获率及 95% 区间；黑色 `x` 是 \(p(z)\) 给出的理论期望。
-
-为了避免小样本类别主导图片，类别 coverage 图默认只显示 ground truth 中至少 10 个术语的类别。
 
 ## 5. 运行
 
@@ -132,7 +141,6 @@ python3 two_annotations_pseudo_truth.py --bootstrap 1000
 simulation_outputs/two_annotations_pseudo_truth_p_z/CRC_metrics_summary.json
 simulation_outputs/two_annotations_pseudo_truth_p_z/plots/estimator_comparison.png
 simulation_outputs/two_annotations_pseudo_truth_p_z/plots/interval_coverage.png
-simulation_outputs/two_annotations_pseudo_truth_p_z/plots/type_capture_coverage.png
 ```
 
 代码不会输出逐次 bootstrap CSV，也不会生成逐行删除审计记录。
@@ -150,7 +158,7 @@ Merged ground truth 的真实值为：precision `0.71520`、recall `0.55946`、t
 | Oracle union-HT | 0.71481 | -0.00040 | 0.00815 | 0.00816 | 0.946 |
 | Naive | 0.68763 | -0.02757 | 0.00772 | 0.02863 | 0.061 |
 
-q-ratio only 相对 Full CRC 把 precision 的 SD 降低约 20%，但绝对偏差略有增加；总体 RMSE 从 `0.01033` 降到 `0.00867`。Oracle 的偏差最小，说明 q-function 对并集捕获概率仍有少量校准误差。Naive 虽然 SD 最小，但 precision 严重低估，95% coverage 只有 `0.061`。
+在这个固定-q删减实验中，q-ratio only 的 precision SD 比 Full CRC 低约 20%，但绝对偏差更大。这个结果只表示它在当前条件模拟中波动较小，不是渐近效率比较。Oracle 的偏差最小，说明 q-function 对并集捕获概率仍有少量校准误差。Naive 虽然 SD 最小，但 precision 严重低估，95% coverage 只有 `0.061`。
 
 ### Recall
 
@@ -161,7 +169,7 @@ q-ratio only 相对 Full CRC 把 precision 的 SD 降低约 20%，但绝对偏�
 | Oracle union-HT | 0.55934 | -0.00013 | 0.00439 | 0.00439 | 0.952 |
 | Naive | 0.56022 | +0.00075 | 0.00430 | 0.00437 | 0.949 |
 
-四种 recall 都接近真实值。原因是缺失术语同时影响 recall 的加权分子和分母，当前数据中的误差发生了较强抵消。q-ratio only 比 Full CRC 的 SD 低约 22%。
+四种 recall 都接近真实值。原因是缺失术语同时影响 recall 的加权分子和分母，当前数据中的误差发生了较强抵消。q-ratio only 在固定-q实验中的 SD 较低，但该数值不包含 nuisance 重新估计，也不代表它低于 EIF 效率界。
 
 ### Type accuracy
 
@@ -172,21 +180,22 @@ q-ratio only 相对 Full CRC 把 precision 的 SD 降低约 20%，但绝对偏�
 | Oracle union-HT | 0.85398 | -0.00024 | 0.00390 | 0.00391 | 0.953 |
 | Naive | 0.85449 | +0.00027 | 0.00382 | 0.00383 | 0.950 |
 
-Full CRC 的 type accuracy 偏差最小，但方差最大。Naive 在这个指标上表现很好，表示当前模拟中“是否被捕获”与“phrase 匹配后 type 是否正确”的关系较弱；这不是所有数据都必然成立。
+Full CRC 的 type accuracy 偏差最小。表中的 SD 排序只是当前固定-q条件结果；Naive 在这个指标上表现接近真实值，表示当前模拟中“是否被捕获”与“phrase 匹配后 type 是否正确”的关系较弱，这不是所有数据都必然成立。
 
 ### Coverage 图解释
 
 - `estimator_comparison.png` 中，除 naive precision 外，其余 95% Monte Carlo 区间都覆盖真实值。
 - `interval_coverage.png` 中，Full CRC、q-ratio only 和 Oracle 的 precision 曲线接近理想对角线；naive precision 因系统偏差明显欠覆盖。Recall 和 type accuracy 的四条曲线基本接近理想线。
-- `type_capture_coverage.png` 中，medication、lab、vital sign 的理论并集捕获率约为 `0.9875`；risk factor 和 anatomy 约为 `0.8875`。1000 次模拟均值与黑色 `x` 基本重合，说明代码正确实现了类别难度不同的 \(p(z)\)。小类别的区间更宽，这是样本量导致的正常随机波动。
 
-本次结果支持把 q-ratio only 作为低方差候选方案，但不能据此直接替换 Full CRC：当前模拟满足给定 \(z\) 后独立捕获，而真实的两个 annotator 可能相关。正式选择前应优先运行下一节的相关捕获情景。
+q-ratio only 在这里仅是消融基线，不能据此替换 EIF-based Full CRC。要检验渐近效率，需要在每个 Monte Carlo replicate 中重新生成完整数据、重新训练或 cross-fit q-function，并随样本量增加比较 \(n\times MSE\)、影响函数方差和 coverage。
 
 ## 7. 后续更严格的比较
 
-当前主实验假定给定 \(z\) 后两个列表独立。建议后续增加以下实验：
+当前主实验固定 q-function，并假定给定 \(z\) 后两个列表独立。建议后续增加以下实验：
 
-1. **相关捕获情景**：加入共享的术语难度 \(U_i\)，例如
+1. **EIF 渐近效率实验**：设置多个样本量；每次重新生成文档和术语，重新训练或 cross-fit q-function，再比较 \(n\times MSE\)、经验影响函数方差和置信区间 coverage。这才是检验效率界的主要实验。
+
+2. **相关捕获情景**：加入共享的术语难度 \(U_i\)，例如
 
    \[
    P(R_{ji}=1\mid z_i,U_i)=logit^{-1}(\alpha_j(z_i)+\lambda_jU_i).
@@ -194,12 +203,12 @@ Full CRC 的 type accuracy 偏差最小，但方差最大。Naive 在这个指�
 
    改变 \(\lambda_j\) 可以比较独立、弱相关和强相关列表，检验 \(q_{12}/(q_1q_2)\) 假设失效时的稳健性。
 
-2. **q-function 校准**：按 type 绘制预测捕获概率与实际捕获频率的 reliability plot，并报告 Brier score。
+3. **q-function 校准**：按 type 绘制预测捕获概率与实际捕获频率的 reliability plot，并报告 Brier score。
 
-3. **删除率和样本量网格**：改变两个基础删除率和文档数，绘制 bias–variance–RMSE 曲面。
+4. **删除率和样本量网格**：改变两个基础删除率和文档数，绘制 bias–variance–RMSE 曲面。
 
-4. **权重截断敏感性**：比较不同最大权重，观察偏差增加与方差下降的权衡。
+5. **权重截断敏感性**：比较不同最大权重，观察偏差增加与方差下降的权衡。
 
-5. **传统 capture–recapture**：加入总体 Chapman 和按 type 分层 Chapman。它们实现简单，但同质捕获假设较强，可作为传统基线而非默认方法。
+6. **传统 capture–recapture**：加入总体 Chapman 和按 type 分层 Chapman。它们实现简单，但同质捕获假设较强，可作为传统基线而非默认方法。
 
-6. **文档级 bootstrap**：真实数据报告置信区间时，应按 `doc_id` 聚类重采样，避免把同一文档中的术语错误地当作独立样本。
+7. **文档级 bootstrap**：真实数据报告置信区间时，应按 `doc_id` 聚类重采样，避免把同一文档中的术语错误地当作独立样本。

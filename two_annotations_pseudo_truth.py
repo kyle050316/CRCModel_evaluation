@@ -4,7 +4,8 @@ The union of the two original annotation lists is treated as ground truth.
 Every ground-truth term is then sampled independently into list 1 and list 2
 with term-specific probabilities p1(z) and p2(z). The two simulated lists are
 passed to the unchanged CRC entry point, and the merged ground truth is used
-only to validate the simulation.
+only to validate the simulation. Pass --model-df to use predictions generated
+by an external model such as GENIE; otherwise synthetic predictions are used.
 """
 
 import argparse
@@ -24,6 +25,7 @@ from evaluate_two_lists_model import (
     build_state_table_from_two_lists,
     evaluate_two_lists_with_model,
     make_evaluation_table,
+    read_table,
     train_q_from_table,
     write_table,
 )
@@ -52,10 +54,6 @@ DEFAULT_BOOTSTRAP_RESAMPLES = 1000
 
 # Nominal confidence levels shown in the Monte Carlo coverage plot.
 COVERAGE_LEVELS = (0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.99)
-
-# Omit very small semantic-type groups from the capture-coverage plot because
-# their Monte Carlo intervals are dominated by group size.
-MIN_TYPE_COUNT_FOR_COVERAGE_PLOT = 10
 
 ESTIMATOR_SUFFIXES = {
     "corrected": "corrected",
@@ -218,6 +216,27 @@ def ground_truth_metrics(ground_truth: pd.DataFrame, model_df: pd.DataFrame) -> 
         "n_model_rows": int(len(model_df)),
     }
     return metrics, labeled
+
+
+def load_external_model_df(model_df_path: Path, test_doc_ids: set[int]) -> pd.DataFrame:
+    """Load model predictions and keep the documents used by the test split."""
+    if not model_df_path.exists():
+        raise FileNotFoundError(f"model_df file not found: {model_df_path}")
+    model_df = read_table(model_df_path)
+    if "phrase" not in model_df.columns and "phrases" in model_df.columns:
+        model_df = model_df.rename(columns={"phrases": "phrase"})
+    missing = [column for column in ["doc_id", "phrase", "type"] if column not in model_df.columns]
+    if missing:
+        raise ValueError(f"model_df is missing required columns: {missing}")
+    model_df = model_df.copy()
+    model_df["doc_id"] = model_df["doc_id"].astype(int)
+    model_df = model_df[model_df["doc_id"].isin(test_doc_ids)].reset_index(drop=True)
+    if model_df.empty:
+        raise ValueError(
+            "model_df has no predictions for the test documents; "
+            f"expected at least one doc_id in {sorted(test_doc_ids)}"
+        )
+    return model_df
 
 
 def train_or_load_q(
@@ -410,80 +429,6 @@ def estimator_diagnostics(boot: Dict[str, np.ndarray], truth: Dict[str, float]) 
     return diagnostics
 
 
-def bootstrap_type_capture_coverage(
-    ground_truth: pd.DataFrame,
-    list1_deletion_proportion: float,
-    list2_deletion_proportion: float,
-    n_resamples: int,
-) -> Dict[str, object]:
-    type_names = ground_truth["type"].fillna("").astype(str).str.strip().str.lower()
-    type_counts = type_names.value_counts()
-    plotted_types = sorted(
-        str(type_name)
-        for type_name, count in type_counts.items()
-        if type_name and int(count) >= MIN_TYPE_COUNT_FOR_COVERAGE_PLOT
-    )
-    p1 = ground_truth.apply(
-        p1_of_z,
-        axis=1,
-        base_deletion_proportion=list1_deletion_proportion,
-    ).to_numpy()
-    p2 = ground_truth.apply(
-        p2_of_z,
-        axis=1,
-        base_deletion_proportion=list2_deletion_proportion,
-    ).to_numpy()
-    values = {
-        "list1": np.zeros((n_resamples, len(plotted_types))),
-        "list2": np.zeros((n_resamples, len(plotted_types))),
-        "union": np.zeros((n_resamples, len(plotted_types))),
-    }
-    masks = [(type_names == type_name).to_numpy() for type_name in plotted_types]
-    for b in range(n_resamples):
-        rng = np.random.default_rng(BOOTSTRAP_BASE_SEED + b)
-        keep1 = rng.random(len(ground_truth)) < p1
-        keep2 = rng.random(len(ground_truth)) < p2
-        for j, mask in enumerate(masks):
-            values["list1"][b, j] = float(keep1[mask].mean())
-            values["list2"][b, j] = float(keep2[mask].mean())
-            values["union"][b, j] = float(np.logical_or(keep1, keep2)[mask].mean())
-    expected = {
-        "list1": np.array([float(p1[mask].mean()) for mask in masks]),
-        "list2": np.array([float(p2[mask].mean()) for mask in masks]),
-        "union": np.array([float((p1[mask] + p2[mask] - p1[mask] * p2[mask]).mean()) for mask in masks]),
-    }
-    return {
-        "types": plotted_types,
-        "counts": {type_name: int(type_counts[type_name]) for type_name in plotted_types},
-        "values": values,
-        "expected": expected,
-    }
-
-
-def type_capture_coverage_summary(coverage: Dict[str, object]) -> Dict[str, object]:
-    type_names = coverage["types"]
-    counts = coverage["counts"]
-    values = coverage["values"]
-    expected = coverage["expected"]
-    assert isinstance(type_names, list)
-    assert isinstance(counts, dict)
-    assert isinstance(values, dict)
-    assert isinstance(expected, dict)
-    summary: Dict[str, object] = {}
-    for j, type_name in enumerate(type_names):
-        row: Dict[str, object] = {"n_terms": counts[type_name]}
-        for source in ["list1", "list2", "union"]:
-            source_values = values[source][:, j]
-            low, high = np.quantile(source_values, [0.025, 0.975])
-            row[source] = {
-                "expected": float(expected[source][j]),
-                "mean": float(source_values.mean()),
-                "interval_95": [float(low), float(high)],
-            }
-        summary[type_name] = row
-    return summary
-
-
 def plot_estimator_comparison(
     boot: Dict[str, np.ndarray],
     truth: Dict[str, float],
@@ -541,57 +486,12 @@ def plot_interval_coverage(
     plt.close(fig)
 
 
-def plot_type_capture_coverage(coverage: Dict[str, object], outpath: Path) -> None:
-    type_names = coverage["types"]
-    values = coverage["values"]
-    expected = coverage["expected"]
-    assert isinstance(type_names, list)
-    assert isinstance(values, dict)
-    assert isinstance(expected, dict)
-    order = np.argsort(expected["union"])
-    labels = [type_names[int(i)] for i in order]
-    y = np.arange(len(labels), dtype=float)
-    offsets = {"list1": -0.22, "list2": 0.0, "union": 0.22}
-    colors = {"list1": "tab:blue", "list2": "tab:orange", "union": "tab:green"}
-    fig, ax = plt.subplots(figsize=(9, max(5.5, 0.48 * len(labels))))
-    for source in ["list1", "list2", "union"]:
-        source_values = values[source][:, order]
-        means = source_values.mean(axis=0)
-        intervals = np.quantile(source_values, [0.025, 0.975], axis=0)
-        errors = np.vstack([means - intervals[0], intervals[1] - means])
-        ax.errorbar(
-            means,
-            y + offsets[source],
-            xerr=errors,
-            fmt="o",
-            capsize=3,
-            color=colors[source],
-            label=f"{source} mean + 95% interval",
-        )
-        ax.scatter(
-            expected[source][order],
-            y + offsets[source],
-            marker="x",
-            color="black",
-            s=28,
-            zorder=3,
-        )
-    ax.set_yticks(y, labels)
-    ax.set_xlim(0.0, 1.02)
-    ax.set_xlabel("Capture coverage")
-    ax.set_title("Capture coverage by semantic type (x = expected from p(z))")
-    ax.grid(axis="x", alpha=0.25)
-    ax.legend(loc="upper left")
-    fig.tight_layout()
-    fig.savefig(outpath, dpi=220)
-    plt.close(fig)
-
-
 def run(
     list1_deletion_proportion: float = LIST1_BASE_DELETION_PROPORTION,
     list2_deletion_proportion: float = LIST2_BASE_DELETION_PROPORTION,
     output_dir: Path = DEFAULT_OUT_DIR,
     n_resamples: int = DEFAULT_BOOTSTRAP_RESAMPLES,
+    model_df_path: Path | None = None,
 ) -> Dict[str, object]:
     if n_resamples < 2:
         raise ValueError("n_resamples must be at least 2")
@@ -606,10 +506,25 @@ def run(
         directory.mkdir(parents=True, exist_ok=True)
 
     full_df = load_full_terms_from_xlsx(INPUT_XLSX) if INPUT_XLSX.exists() else load_synthetic_full_terms(INPUT_XLSX)
-    full_df = add_model_truth_columns(full_df)
     train_full, test_full = split_full_terms(full_df)
-    all_model_df = build_synthetic_model_df(full_df)
-    test_model_df = all_model_df[all_model_df["doc_id"].isin(test_full["doc_id"].unique())].copy().reset_index(drop=True)
+    test_doc_ids = {int(doc_id) for doc_id in test_full["doc_id"].unique()}
+    if model_df_path is None:
+        full_df = add_model_truth_columns(full_df)
+        all_model_df = build_synthetic_model_df(full_df)
+        test_model_df = all_model_df[all_model_df["doc_id"].isin(test_doc_ids)].copy().reset_index(drop=True)
+        model_df_info = {
+            "source": "synthetic_fallback",
+            "input_path": None,
+            "note": "Generated by build_synthetic_model_df(); pass --model-df to evaluate external predictions.",
+        }
+    else:
+        model_df_path = model_df_path.resolve()
+        test_model_df = load_external_model_df(model_df_path, test_doc_ids)
+        model_df_info = {
+            "source": "external_file",
+            "input_path": str(model_df_path),
+            "note": "Loaded once and held fixed across all bootstrap list-thinning repetitions.",
+        }
 
     train_raw1, train_raw2, _ = simulate_two_lists(train_full, seed=SIM_SEED)
     test_raw1, test_raw2, _ = simulate_two_lists(test_full, seed=SIM_SEED + 1)
@@ -700,34 +615,30 @@ def run(
     type_accuracy_plot = plot_dir / "CRC_type_accuracy.png"
     estimator_comparison_plot = plot_dir / "estimator_comparison.png"
     interval_coverage_plot = plot_dir / "interval_coverage.png"
-    type_capture_coverage_plot = plot_dir / "type_capture_coverage.png"
     plot_hist_two(boot["precision_corrected"], boot["precision_naive"], truth["precision_true"], "CRC precision (merged ground truth)", "Precision", precision_plot, "Merged ground truth")
     plot_hist_two(boot["recall_corrected"], boot["recall_naive"], truth["recall_true"], "CRC recall (merged ground truth)", "Recall", recall_plot, "Merged ground truth")
     plot_hist_two(boot["type_accuracy_corrected"], boot["type_accuracy_naive"], truth["type_accuracy_true"], "CRC type accuracy (merged ground truth)", "Type accuracy", type_accuracy_plot, "Merged ground truth")
     plot_estimator_comparison(boot, truth, estimator_comparison_plot)
     plot_interval_coverage(boot, truth, interval_coverage_plot)
-    type_coverage = bootstrap_type_capture_coverage(
-        test_ground_truth,
-        list1_deletion_proportion,
-        list2_deletion_proportion,
-        n_resamples,
-    )
-    plot_type_capture_coverage(type_coverage, type_capture_coverage_plot)
 
-    hidden_tp = float(test_full["matched_truth"].sum())
-    hidden_phrase = float(test_full["phrase_match_truth"].sum())
+    hidden_truth, _ = ground_truth_metrics(test_full[KEY_COLUMNS], test_model_df)
     hidden_full_truth_reference = {
         "note": "Available only in this synthetic validation; not used by the merged-ground-truth estimator.",
         "n_terms": int(len(test_full)),
         "n_terms_missing_from_merged_ground_truth": int(len(test_full) - len(test_ground_truth)),
-        "precision": hidden_tp / len(test_model_df),
-        "recall": hidden_tp / len(test_full),
-        "type_accuracy": hidden_tp / hidden_phrase,
+        "precision": hidden_truth["precision_true"],
+        "recall": hidden_truth["recall_true"],
+        "type_accuracy": hidden_truth["type_accuracy_true"],
     }
 
     summary = {
         "method": "two_annotation_union_ground_truth_sampled_into_two_lists_by_p_z",
         "matching_method": "character",
+        "model_df": {
+            **model_df_info,
+            "n_test_predictions": int(len(test_model_df)),
+            "test_doc_ids": sorted(test_doc_ids),
+        },
         "p_z": simulation_config,
         "thinning": {
             "list1_base_deletion_proportion": list1_deletion_proportion,
@@ -771,7 +682,6 @@ def run(
         "point_alternative_estimators": point_alternative_estimators,
         "bootstrap": distribution_summary(boot, n_resamples),
         "estimator_diagnostics": estimator_diagnostics(boot, truth),
-        "type_capture_coverage": type_capture_coverage_summary(type_coverage),
         "paths": {
             "test_original_list1": relpath(data_dir / "test_original_list1.csv"),
             "test_original_list2": relpath(data_dir / "test_original_list2.csv"),
@@ -786,7 +696,6 @@ def run(
             "type_accuracy_hist": relpath(type_accuracy_plot),
             "estimator_comparison_plot": relpath(estimator_comparison_plot),
             "interval_coverage_plot": relpath(interval_coverage_plot),
-            "type_capture_coverage_plot": relpath(type_capture_coverage_plot),
             "summary": relpath(summary_path),
         },
         "train_summary": train_summary,
@@ -802,9 +711,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--list2-delete", type=float, default=LIST2_BASE_DELETION_PROPORTION)
     parser.add_argument("--bootstrap", type=int, default=DEFAULT_BOOTSTRAP_RESAMPLES)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUT_DIR)
+    parser.add_argument(
+        "--model-df",
+        type=Path,
+        default=None,
+        help=(
+            "CSV/XLSX model predictions with doc_id, phrase, and type. "
+            "Rows outside the test document split are ignored. "
+            "If omitted, the existing synthetic model_df fallback is used."
+        ),
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    run(args.list1_delete, args.list2_delete, args.output_dir, args.bootstrap)
+    run(
+        list1_deletion_proportion=args.list1_delete,
+        list2_deletion_proportion=args.list2_delete,
+        output_dir=args.output_dir,
+        n_resamples=args.bootstrap,
+        model_df_path=args.model_df,
+    )
